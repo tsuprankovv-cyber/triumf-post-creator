@@ -4,7 +4,7 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.sqlite import SqliteStorage
+from aiogram.fsm.storage.memory import MemoryStorage  # ✅ Исправлено: MemoryStorage
 from aiogram.enums import ParseMode
 
 from states import PostWorkflow
@@ -20,7 +20,7 @@ if not BOT_TOKEN:
     raise ValueError("❌ Нет токена!")
 
 bot = Bot(token=BOT_TOKEN)
-storage = SqliteStorage('fsm_storage.db')
+storage = MemoryStorage()  # ✅ Исправлено: было SqliteStorage
 dp = Dispatcher(storage=storage)
 init_db()
 
@@ -60,10 +60,11 @@ async def handle_video(message: types.Message, state: FSMContext):
 
 @dp.message(PostWorkflow.selecting_media, F.text)
 async def skip_media(message: types.Message, state: FSMContext):
-    await state.update_data(media_type=None, media_id=None)
-    await save_draft(message.from_user.id, {}, 'selecting_media')
-    await message.answer("⏭️ Пропущено! Напиши текст:", reply_markup=text_navigation_keyboard())
-    await state.set_state(PostWorkflow.writing_text)
+    if message.text in ["⏭️ Пропустить", "✅ Готово"]:
+        await state.update_data(media_type=None, media_id=None)
+        await save_draft(message.from_user.id, {}, 'selecting_media')
+        await message.answer("⏭️ Пропущено! Напиши текст:", reply_markup=text_navigation_keyboard())
+        await state.set_state(PostWorkflow.writing_text)
 
 @dp.message(PostWorkflow.writing_text, F.text)
 async def handle_text(message: types.Message, state: FSMContext):
