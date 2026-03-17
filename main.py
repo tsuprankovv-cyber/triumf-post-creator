@@ -4,7 +4,7 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage  # ✅ Исправлено: MemoryStorage
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
 
 from states import PostWorkflow
@@ -20,7 +20,7 @@ if not BOT_TOKEN:
     raise ValueError("❌ Нет токена!")
 
 bot = Bot(token=BOT_TOKEN)
-storage = MemoryStorage()  # ✅ Исправлено: было SqliteStorage
+storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 init_db()
 
@@ -35,7 +35,7 @@ async def cmd_help(message: types.Message):
 @dp.message(F.text == "❌ Отмена")
 async def cmd_cancel(message: types.Message, state: FSMContext):
     await state.clear()
-    await delete_draft(message.from_user.id)
+    delete_draft(message.from_user.id)  # ✅ Убран await
     await message.answer("❌ Отменено", reply_markup=main_keyboard())
 
 @dp.message(F.text == "➕ Новый пост")
@@ -47,14 +47,14 @@ async def cmd_new(message: types.Message, state: FSMContext):
 @dp.message(PostWorkflow.selecting_media, F.photo)
 async def handle_photo(message: types.Message, state: FSMContext):
     await state.update_data(media_type='photo', media_id=message.photo[-1].file_id)
-    await save_draft(message.from_user.id, {'media_type': 'photo', 'media_id': message.photo[-1].file_id}, 'selecting_media')
+    save_draft(message.from_user.id, {'media_type': 'photo', 'media_id': message.photo[-1].file_id}, 'selecting_media')  # ✅ Убран await
     await message.answer("📸 Фото! Теперь напиши текст:", reply_markup=text_navigation_keyboard())
     await state.set_state(PostWorkflow.writing_text)
 
 @dp.message(PostWorkflow.selecting_media, F.video)
 async def handle_video(message: types.Message, state: FSMContext):
     await state.update_data(media_type='video', media_id=message.video.file_id)
-    await save_draft(message.from_user.id, {'media_type': 'video', 'media_id': message.video.file_id}, 'selecting_media')
+    save_draft(message.from_user.id, {'media_type': 'video', 'media_id': message.video.file_id}, 'selecting_media')  # ✅ Убран await
     await message.answer("🎬 Видео! Теперь напиши текст:", reply_markup=text_navigation_keyboard())
     await state.set_state(PostWorkflow.writing_text)
 
@@ -62,7 +62,7 @@ async def handle_video(message: types.Message, state: FSMContext):
 async def skip_media(message: types.Message, state: FSMContext):
     if message.text in ["⏭️ Пропустить", "✅ Готово"]:
         await state.update_data(media_type=None, media_id=None)
-        await save_draft(message.from_user.id, {}, 'selecting_media')
+        save_draft(message.from_user.id, {}, 'selecting_media')  # ✅ Убран await
         await message.answer("⏭️ Пропущено! Напиши текст:", reply_markup=text_navigation_keyboard())
         await state.set_state(PostWorkflow.writing_text)
 
@@ -71,7 +71,7 @@ async def handle_text(message: types.Message, state: FSMContext):
     if message.text in ["◀️ Назад к медиа", "Вперёд к ссылкам ▶️"]:
         return
     await state.update_data(text=message.text)
-    await save_draft(message.from_user.id, {'text': message.text}, 'writing_text')
+    save_draft(message.from_user.id, {'text': message.text}, 'writing_text')  # ✅ Убран await
     await message.answer(f"✍️ Текст сохранён! ({len(message.text)} симв.)\n\nНажми Вперёд к ссылкам ▶️", reply_markup=text_navigation_keyboard())
 
 @dp.callback_query(lambda c: c.data.startswith('text:'))
