@@ -10,15 +10,24 @@ DB_NAME = 'templates.db'
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # Таблица имеет 8 колонок: id, user_id, media_type, media_id, text_content, buttons_json, current_step, created_at, updated_at
+    # Но id - AUTOINCREMENT, значит при INSERT нужно 8 значений.
+    c.execute('''CREATE TABLE IF NOT EXISTS post_drafts
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  media_type TEXT,
+                  media_id TEXT,
+                  text_content TEXT,
+                  buttons_json TEXT,
+                  current_step TEXT,
+                  created_at TIMESTAMP,
+                  updated_at TIMESTAMP)''')
+    
     c.execute('''CREATE TABLE IF NOT EXISTS saved_buttons
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER, button_text TEXT, button_url TEXT,
                   created_at TIMESTAMP)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS post_drafts
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER, media_type TEXT, media_id TEXT,
-                  text_content TEXT, buttons_json TEXT, current_step TEXT,
-                  created_at TIMESTAMP, updated_at TIMESTAMP)''')
+    
     conn.commit()
     conn.close()
     logger.info("✅ База данных инициализирована")
@@ -58,24 +67,40 @@ def delete_button(button_id: int, user_id: int) -> bool:
 def save_draft(user_id: int, data: dict, step: str) -> bool:
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    
+    # Проверяем наличие черновика
     c.execute('SELECT id FROM post_drafts WHERE user_id = ?', (user_id,))
     existing = c.fetchone()
+    
     now = datetime.now()
+    # Сериализуем кнопки
     buttons_json = json.dumps(data.get('buttons', [])) if data.get('buttons') else None
     
     if existing:
-        c.execute('''UPDATE post_drafts SET media_type = ?, media_id = ?, text_content = ?,
-                     buttons_json = ?, current_step = ?, updated_at = ? WHERE user_id = ?''',
+        # UPDATE: 8 полей + where clause
+        c.execute('''UPDATE post_drafts 
+                     SET media_type = ?, media_id = ?, text_content = ?, buttons_json = ?, current_step = ?, updated_at = ? 
+                     WHERE user_id = ?''',
                   (data.get('media_type'), data.get('media_id'), data.get('text'),
                    buttons_json, step, now, user_id))
     else:
-        c.execute('''INSERT INTO post_drafts (user_id, media_type, media_id, text_content,
-                     buttons_json, current_step, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                  (user_id, data.get('media_type'), data.get('media_id'), data.get('text'),
-                   buttons_json, step, now, now))
+        # INSERT: 8 значений (без id)
+        # Колонки: user_id, media_type, media_id, text_content, buttons_json, current_step, created_at, updated_at
+        c.execute('''INSERT INTO post_drafts 
+                     (user_id, media_type, media_id, text_content, buttons_json, current_step, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                  (user_id, 
+                   data.get('media_type'), 
+                   data.get('media_id'), 
+                   data.get('text'),
+                   buttons_json, 
+                   step, 
+                   now,       # created_at
+                   now))      # updated_at
+    
     conn.commit()
     conn.close()
+    # logger.debug(f"💾 Черновик сохранён для user {user_id}")
     return True
 
 def get_draft(user_id: int) -> dict:
@@ -86,8 +111,11 @@ def get_draft(user_id: int) -> dict:
     conn.close()
     if row:
         return {
-            'media_type': row[0], 'media_id': row[1], 'text': row[2],
-            'buttons': json.loads(row[3]) if row[3] else [], 'current_step': row[4]
+            'media_type': row[0],
+            'media_id': row[1],
+            'text': row[2],
+            'buttons': json.loads(row[3]) if row[3] else [],
+            'current_step': row[4]
         }
     return {}
 
