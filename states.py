@@ -5,6 +5,7 @@ class PostWorkflow(StatesGroup):
     selecting_media = State()
     writing_text = State()
     adding_buttons = State()
+    ai_input = State()  # <-- ДОБАВЛЕНО: Состояние для ввода ключевых слов ИИ
 
 class AddButtonSteps(StatesGroup):
     waiting_for_text = State()
