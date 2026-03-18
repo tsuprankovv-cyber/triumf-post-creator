@@ -3,10 +3,10 @@ from aiogram.fsm.state import State, StatesGroup
 
 class PostWorkflow(StatesGroup):
     selecting_media = State()
-    configuring_media = State()
     writing_text = State()
-    adding_inline_links = State()
-    adding_buttons = State()
-    preview = State()
-    editing_step = State()
-    confirming = State()
+    adding_buttons = State() # Состояние выбора режима добавления
+
+# Новые состояния для пошагового создания кнопки
+class AddButtonSteps(StatesGroup):
+    waiting_for_text = State()
+    waiting_for_url = State()
