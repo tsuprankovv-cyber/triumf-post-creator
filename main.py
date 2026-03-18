@@ -6,15 +6,14 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 
-# ИМПОРТЫ НАШИХ МОДУЛЕЙ
 from states import PostWorkflow, AddButtonSteps
-from keyboards import main_keyboard, cancel_keyboard, post_creation_keyboard, media_navigation_keyboard, text_navigation_keyboard, library_keyboard, final_keyboard
+from keyboards import main_keyboard, cancel_keyboard, post_creation_keyboard, get_preview_keyboard, library_keyboard
 from database import init_db, save_button, get_saved_buttons, delete_button, save_draft, get_draft, delete_draft
-from smart_text import smart_format_text  # <-- ВАЖНО: Импорт нового модуля
+from smart_text import smart_format_text, remove_emojis, remove_formatting
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    handlers=[logging.StreamHandler(), logging.FileHandler('bot_debug.log', encoding='utf-8', mode='a')])
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -25,259 +24,409 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 init_db()
 
-logger.info("="*60 + "\n🚀 ПОСТ-ТРИУМФ ЗАПУСКАЕТСЯ\n" + "="*60)
+# Хранилище ID сообщения с предпросмотром: {user_id: message_id}
+preview_messages = {} 
 
-# ==================== СТАРТ ====================
+async def update_preview(message: types.Message, state: FSMContext, force_new: bool = False):
+    """Обновляет или создает сообщение предпросмотра"""
+    user_id = message.from_user.id
+    data = await state.get_data()
+    
+    step = data.get('step', 'media')
+    text_content = data.get('text', '')
+    media_id = data.get('media_id')
+    media_type = data.get('media_type')
+    buttons_data = data.get('buttons', [])
+    
+    # Формируем текст превью
+    if not text_content:
+        caption = "_(Нажмите ✏️ Править текст, чтобы добавить описание)_\n\nЗдесь будет ваш продающий пост."
+    else:
+        caption = text_content
+        
+    # Клавиатура управления (кнопки под постом)
+    has_formatted = data.get('original_text') and data.get('original_text') != text_content
+    control_kb = get_preview_keyboard(step, bool(text_content), has_formatted)
+    
+    try:
+        msg_id = preview_messages.get(user_id)
+        
+        if msg_id and not force_new:
+            # РЕДАКТИРУЕМ СУЩЕСТВУЮЩЕЕ СООБЩЕНИЕ
+            if media_type == 'photo' and media_id:
+                # Нельзя менять клавиатуру через edit_caption, поэтому делаем два вызова или игнорируем смену кнопок если тип не меняется
+                try:
+                    await bot.edit_message_caption(chat_id=user_id, message_id=msg_id, caption=caption, parse_mode=ParseMode.MARKDOWN)
+                except: pass
+                # Обновляем кнопки отдельно
+                await bot.edit_message_reply_markup(chat_id=user_id, message_id=msg_id, reply_markup=control_kb)
+                
+            elif media_type == 'video' and media_id:
+                try:
+                    await bot.edit_message_caption(chat_id=user_id, message_id=msg_id, caption=caption, parse_mode=ParseMode.MARKDOWN)
+                except: pass
+                await bot.edit_message_reply_markup(chat_id=user_id, message_id=msg_id, reply_markup=control_kb)
+            else:
+                # Текст
+                await bot.edit_message_text(chat_id=user_id, message_id=msg_id, text=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=control_kb)
+        else:
+            # СОЗДАЕМ НОВОЕ СООБЩЕНИЕ
+            new_msg = None
+            if media_type == 'photo' and media_id:
+                new_msg = await bot.send_photo(chat_id=user_id, photo=media_id, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=control_kb)
+            elif media_type == 'video' and media_id:
+                new_msg = await bot.send_video(chat_id=user_id, video=media_id, caption=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=control_kb)
+            else:
+                new_msg = await bot.send_message(chat_id=user_id, text=caption, parse_mode=ParseMode.MARKDOWN, reply_markup=control_kb)
+            
+            if new_msg:
+                preview_messages[user_id] = new_msg.message_id
+                
+    except TelegramBadRequest as e:
+        logger.warning(f"Ошибка обновления превью (возможно, текст не изменился): {e}")
+    except Exception as e:
+        logger.error(f"Критическая ошибка превью: {e}")
+
+# ==================== СТАРТ И МЕНЮ ====================
 @dp.message(Command('start'))
 @dp.message(F.text == "❓ Помощь")
 async def cmd_start(message: types.Message):
-    await message.answer("🤖 **Пост-Триумф**\n\n➕ Новый пост | 📚 Мои кнопки | ❓ Помощь", parse_mode=ParseMode.MARKDOWN, reply_markup=main_keyboard())
+    await message.answer("🤖 **Пост-Триумф Live**\n\nСоздавайте посты в реальном времени!", reply_markup=main_keyboard())
 
 @dp.message(F.text == "❌ Отмена")
 async def cmd_cancel(message: types.Message, state: FSMContext):
-    await state.clear(); delete_draft(message.from_user.id)
+    uid = message.from_user.id
+    await state.clear()
+    if uid in preview_messages:
+        try: await bot.delete_message(uid, preview_messages[uid])
+        except: pass
+        del preview_messages[uid]
     await message.answer("❌ Отменено.", reply_markup=main_keyboard())
 
-# ==================== ШАГ 1: МЕДИА ====================
 @dp.message(F.text == "➕ Новый пост")
-@dp.message(Command('new'))
-async def cmd_new(message: types.Message, state: FSMContext):
+async def start_post(message: types.Message, state: FSMContext):
+    uid = message.from_user.id
     await state.set_state(PostWorkflow.selecting_media)
-    await message.answer("📷 **ШАГ 1: Медиа**\n\nОтправьте фото/видео или нажмите ⏭️ Пропустить", reply_markup=media_navigation_keyboard())
-
-@dp.callback_query(lambda c: c.data.startswith('media:'))
-async def media_callback(callback: types.CallbackQuery, state: FSMContext):
-    action = callback.data.split(':')[1]
-    uid = callback.from_user.id
-    if action == 'skip':
-        await state.update_data(media_type=None, media_id=None)
-        save_draft(uid, {}, 'selecting_media')
-        await goto_text_step(callback.message, state, uid)
-        await callback.answer("⏭️ Пропущено")
-    elif action == 'done':
-        data = await state.get_data()
-        if data.get('media_id'):
-            await goto_text_step(callback.message, state, uid)
-            await callback.answer("✅ Переход к тексту")
-        else:
-            await callback.answer("⚠️ Сначала отправьте медиа или нажмите 'Пропустить'", show_alert=True)
-
-@dp.message(PostWorkflow.selecting_media, F.photo)
-async def handle_photo(message: types.Message, state: FSMContext):
-    await state.update_data(media_type='photo', media_id=message.photo[-1].file_id)
-    save_draft(message.from_user.id, {'media_type': 'photo', 'media_id': message.photo[-1].file_id}, 'selecting_media')
-    await goto_text_step(message, state, message.from_user.id)
-
-@dp.message(PostWorkflow.selecting_media, F.video)
-async def handle_video(message: types.Message, state: FSMContext):
-    await state.update_data(media_type='video', media_id=message.video.file_id)
-    save_draft(message.from_user.id, {'media_type': 'video', 'media_id': message.video.file_id}, 'selecting_media')
-    await goto_text_step(message, state, message.from_user.id)
-
-async def goto_text_step(target_message, state: FSMContext, uid: int):
-    await state.set_state(PostWorkflow.writing_text)
-    data = await state.get_data()
-    curr = data.get('text', "")
-    orig = data.get('original_text', "")
+    await state.update_data(step='media', text='', media_id=None, media_type=None, buttons=[], original_text=None, ai_keywords=None)
     
-    # Сохраняем оригинал при первом входе
-    if curr and not orig:
-        await state.update_data(original_text=curr)
-        save_draft(uid, {'text': curr, 'original_text': curr}, 'writing_text')
-        
-    has_fmt = bool(orig and curr != orig)
-    txt = "✍️ **ШАГ 2: Текст поста**\n\n"
-    if curr:
-        prev = curr[:150] + "..." if len(curr) > 150 else curr
-        txt += f"📝 *Текущий:* _{prev}_\n\n"
-    txt += "💡 Поддерживается: `**жирный**`, `*курсив*`\n\n🤖 Нажмите «🪄 Сделать красиво» для авто-оформления."
-    await target_message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=text_navigation_keyboard(show_reset=has_fmt))
+    # Удаляем старое превью если было
+    if uid in preview_messages:
+        try: await bot.delete_message(uid, preview_messages[uid])
+        except: pass
+    
+    await update_preview(message, state, force_new=True)
+    await message.answer("ℹ️ **Редактор открыт!**\nВсе изменения будут появляться в сообщении выше.", reply_markup=cancel_keyboard())
 
-# ==================== ШАГ 2: ТЕКСТ И ФОРМАТИРОВАНИЕ ====================
-@dp.callback_query(lambda c: c.data.startswith('text:'))
-async def text_callback(callback: types.CallbackQuery, state: FSMContext):
+# ==================== КОНТРОЛЛЕР ПРЕВЬЮ (ГЛАВНЫЙ МОЗГ) ====================
+@dp.callback_query(lambda c: c.data.startswith('prev:'))
+async def preview_controller(callback: types.CallbackQuery, state: FSMContext):
     action = callback.data.split(':')[1]
     uid = callback.from_user.id
     data = await state.get_data()
-    curr = data.get('text', "")
-    orig = data.get('original_text', "")
-
-    if not curr and action.startswith('smart'):
-        await callback.answer("⚠️ Сначала введите текст!", show_alert=True); return
-
-    if action == 'back_to_media':
-        await state.set_state(PostWorkflow.selecting_media)
-        has_m = bool(data.get('media_id'))
-        await callback.message.edit_text(f"📷 **Медиа**\n\n{'✅ Загружено.' if has_m else 'Не выбрано.'}", reply_markup=media_navigation_keyboard())
-        await callback.answer()
-    elif action == 'next_to_buttons':
-        await callback.message.answer("🔘 **ШАГ 3: Кнопки**\n\nВыберите способ:", reply_markup=post_creation_keyboard())
-        await callback.answer()
-    elif action == 'edit_mode':
-        await callback.message.answer("✏️ **Отправьте новый текст:**", reply_markup=cancel_keyboard())
-        await callback.answer()
-    elif action == 'smart_format':
-        await state.update_data(smart_variant=0)
-        res = smart_format_text(curr, 0)
-        await apply_smart(state, callback, uid, res['text'], res['style_name'])
-    elif action == 'smart_format_next':
-        v = data.get('smart_variant', 0) + 1
-        await state.update_data(smart_variant=v)
-        res = smart_format_text(curr, v)
-        await apply_smart(state, callback, uid, res['text'], res['style_name'])
-    elif action == 'smart_reset':
-        if orig:
-            await state.update_data(text=orig, smart_variant=-1)
-            save_draft(uid, {'text': orig}, 'writing_text')
-            await callback.message.answer("↩️ **Текст сброшен к исходнику.**", reply_markup=text_navigation_keyboard(show_reset=False))
-            await callback.answer("Сброшено")
-        else:
-            await callback.answer("Нет исходника", show_alert=True)
-
-async def apply_smart(state, callback, uid, text, style):
-    await state.update_data(text=text)
-    save_draft(uid, {'text': text}, 'writing_text')
-    prev = text[:200] + "..." if len(text) > 200 else text
-    await callback.message.answer(f"🪄 **Стиль: {style}**\n\n{prev}\n\nЖмите «🔄 Ещё» или «↩️ Исходник».", parse_mode=ParseMode.MARKDOWN, reply_markup=text_navigation_keyboard(show_reset=True))
-    await callback.answer("Готово!")
-
-@dp.message(PostWorkflow.writing_text, F.text)
-async def handle_text_logic(message: types.Message, state: FSMContext):
-    data = await state.get_data()
     
-    # Быстрый ввод кнопок (если активен флаг)
-    if data.get('waiting_for_quick_buttons'):
-        if message.text == "❌ Отмена":
-            await state.update_data(waiting_for_quick_buttons=False)
-            await cmd_cancel(message, state); return
-        
-        lines = message.text.strip().split('\n')
-        count = 0
-        for line in lines:
-            parts = line.split(' - ', 1) if ' - ' in line else line.split('-', 1)
-            if len(parts) == 2:
-                t, u = parts[0].strip(), parts[1].strip()
-                if u.startswith(('http://', 'https://', 't.me/', 'tg://')):
-                    if save_button(message.from_user.id, t, u): count += 1
-        
-        await state.update_data(waiting_for_quick_buttons=False)
-        msg = f"✅ Создано кнопок: {count}!" if count > 0 else "⚠️ Не распознано. Формат: `Текст - Ссылка`"
-        await message.answer(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
+    # --- ОТМЕНА ---
+    if action == 'cancel':
+        await cmd_cancel(callback.message, state)
+        await callback.answer()
         return
 
-    # Обычный текст
-    ignore = ["◀️ Назад к медиа", "Вперёд к кнопкам ▶️", "✏️ Изменить текст", "➕ Добавить новую (по шагам)", "⚡ Быстрый ввод (списком)", "📚 Выбрать из библиотеки", "✅ Готово с кнопками"]
-    if message.text in ignore: return
-    if message.text == "❌ Отмена": await cmd_cancel(message, state); return
-    
+    # --- ШАГ 1: МЕДИА ---
+    if action == 'skip_media':
+        await state.update_data(media_type=None, media_id=None, step='text')
+        await update_preview(callback.message, state)
+        await callback.answer("Фото пропущено")
+        
+    elif action == 'to_text':
+        if data.get('media_id') or data.get('media_type') is None:
+             await state.update_data(step='text')
+             await update_preview(callback.message, state)
+             await callback.answer("Переход к тексту")
+        else:
+             await callback.answer("⚠️ Загрузите фото или нажмите 'Пропустить'", show_alert=True)
+
+    # --- ШАГ 2: ТЕКСТ И ИИ ---
+    elif action == 'back_media':
+        await state.update_data(step='media')
+        await update_preview(callback.message, state)
+        await callback.answer()
+
+    elif action == 'edit_text':
+        # Извлекаем текст, чистим его и просим пользователя отредактировать
+        raw_text = data.get('text', '')
+        if not raw_text:
+            await callback.answer("Введите текст первым сообщением!", show_alert=True)
+            return
+        
+        # Очищаем от формата и эмодзи для удобного редактирования
+        clean_text = remove_emojis(remove_formatting(raw_text))
+        
+        await state.set_state(PostWorkflow.writing_text)
+        await callback.message.answer(f"✏️ **Редактирование текста**\n\nНиже ваш текст без форматирования. Исправьте его и отправьте обратно:\n\n_{clean_text[:500]}_", parse_mode=ParseMode.MARKDOWN)
+        await callback.answer()
+
+    elif action == 'ai_generate':
+        # Запрос ключевых слов для ИИ
+        await state.set_state(PostWorkflow.ai_input)
+        kws = data.get('ai_keywords', '')
+        hint = f"\n\nПрошлые ключи: `{kws}`\nИзмените их или напишите новые:" if kws else ""
+        await callback.message.answer(f"🤖 **Генератор текста**\n\nНапишите ключевые слова (через запятую):{hint}", parse_mode=ParseMode.MARKDOWN)
+        await callback.answer()
+
+    elif action == 'smart_format':
+        if not data.get('text'):
+            await callback.answer("⚠️ Сначала введите текст!", show_alert=True)
+            return
+        await state.update_data(smart_variant=0)
+        res = smart_format_text(data['text'], 0)
+        await state.update_data(text=res['text'], original_text=data.get('text', ''), smart_variant=0)
+        save_draft(uid, {'text': res['text']}, 'text')
+        await update_preview(callback.message, state)
+        await callback.answer("✨ Отформатировано!")
+
+    elif action == 'smart_next':
+        v = data.get('smart_variant', 0) + 1
+        orig = data.get('original_text', data.get('text'))
+        res = smart_format_text(orig, v)
+        await state.update_data(text=res['text'], smart_variant=v)
+        await update_preview(callback.message, state)
+        await callback.answer("🔄 Вариант изменен")
+        
+    elif action == 'smart_reset':
+        orig = data.get('original_text', '')
+        await state.update_data(text=orig, smart_variant=-1)
+        await update_preview(callback.message, state)
+        await callback.answer("↩️ Сброшено")
+
+    elif action == 'remove_emojis':
+        if not data.get('text'): return
+        cleaned = remove_emojis(data['text'])
+        await state.update_data(text=cleaned)
+        await update_preview(callback.message, state)
+        await callback.answer("🧹 Эмодзи удалены")
+
+    elif action == 'remove_format':
+        if not data.get('text'): return
+        cleaned = remove_formatting(data['text'])
+        await state.update_data(text=cleaned)
+        await update_preview(callback.message, state)
+        await callback.answer("📄 Форматирование снято")
+
+    elif action == 'to_buttons':
+        if not data.get('text'):
+            await callback.answer("⚠️ Введите текст!", show_alert=True)
+            return
+        await state.update_data(step='buttons')
+        await update_preview(callback.message, state)
+        await callback.answer("Переход к кнопкам")
+        
+    # --- ШАГ 3: КНОПКИ ---
+    elif action == 'back_text':
+        await state.update_data(step='text')
+        await update_preview(callback.message, state)
+        await callback.answer()
+
+    elif action == 'add_btn':
+        await state.set_state(AddButtonSteps.waiting_for_text)
+        await callback.message.answer("➕ **Новая кнопка**\n\nВведите текст кнопки (например: *Забронировать*):")
+        await callback.answer()
+        
+    elif action == 'lib_btn':
+        btns = get_saved_buttons(uid)
+        if not btns:
+            await callback.answer("📚 Библиотека пуста!", show_alert=True)
+            return
+        # Показываем библиотеку отдельным сообщением для выбора
+        sel = set(data.get('temp_selected', []))
+        await callback.message.answer("**📚 Выберите кнопки:**", reply_markup=library_keyboard(btns, sel))
+        await callback.answer()
+
+    elif action == 'finish':
+        # ФИНАЛ: Создаем чистый пост в ленте
+        await finish_post_process(callback.message, state)
+        await callback.answer("✅ Пост опубликован!")
+
+# ==================== ОБРАБОТКА ВВОДА ПОЛЬЗОВАТЕЛЯ ====================
+
+@dp.message(PostWorkflow.writing_text, F.text)
+async def handle_text_edit(message: types.Message, state: FSMContext):
     txt = message.text
-    # Обновляем и текст, и оригинал при ручном вводе
     await state.update_data(text=txt, original_text=txt, smart_variant=-1)
-    save_draft(message.from_user.id, {'text': txt, 'original_text': txt}, 'writing_text')
-    await message.answer(f"✅ **Текст сохранён!** ({len(txt)} симв.)", reply_markup=text_navigation_keyboard(show_reset=False))
+    save_draft(message.from_user.id, {'text': txt, 'original_text': txt}, 'text')
+    await state.set_state(None) # Сброс состояния ввода
+    await update_preview(message, state)
+    await message.delete() # Удаляем сообщение с текстом, чтобы не мусорить
+    await message.answer("✅ Текст обновлен в превью выше!", delete_after=3)
 
-# ==================== ШАГ 3: КНОПКИ ====================
-@dp.message(F.text == "📚 Мои кнопки")
-async def cmd_my_buttons(message: types.Message):
-    btns = get_saved_buttons(message.from_user.id)
-    if not btns: await message.answer("📚 Пусто.", reply_markup=main_keyboard()); return
-    await message.answer("**📚 Кнопки:**", parse_mode=ParseMode.MARKDOWN, reply_markup=library_keyboard(btns))
-
-@dp.message(F.text == "➕ Добавить новую (по шагам)")
-async def start_add_step(message: types.Message, state: FSMContext):
-    await state.update_data(new_btn_text=None, new_btn_url=None)
-    await state.set_state(AddButtonSteps.waiting_for_text)
-    await message.answer("1️⃣ **Введите текст кнопки:**", reply_markup=cancel_keyboard())
+@dp.message(PostWorkflow.ai_input, F.text)
+async def handle_ai_input(message: types.Message, state: FSMContext):
+    keywords = message.text.strip()
+    await state.update_data(ai_keywords=keywords)
+    
+    # ЭМУЛЯЦИЯ ИИ (Шаблоны)
+    generated_text = generate_ai_text(keywords)
+    
+    await state.update_data(text=generated_text, original_text=generated_text, smart_variant=-1)
+    save_draft(message.from_user.id, {'text': generated_text}, 'text')
+    await state.set_state(None)
+    await update_preview(message, state)
+    await message.delete()
+    await message.answer("🤖 Текст сгенерирован! Смотрите превью выше.", delete_after=3)
 
 @dp.message(AddButtonSteps.waiting_for_text, F.text)
 async def proc_btn_text(message: types.Message, state: FSMContext):
-    if message.text == "❌ Отмена": await cmd_cancel(message, state); return
     await state.update_data(new_btn_text=message.text.strip())
     await state.set_state(AddButtonSteps.waiting_for_url)
-    await message.answer(f"2️⃣ **Введите ссылку для «{message.text}»:**", reply_markup=cancel_keyboard())
+    await message.answer(f"2️⃣ Введите ссылку для «{message.text}»:")
+    await message.delete()
 
 @dp.message(AddButtonSteps.waiting_for_url, F.text)
 async def proc_btn_url(message: types.Message, state: FSMContext):
-    if message.text == "❌ Отмена": await cmd_cancel(message, state); return
-    data = await state.get_data()
     url = message.text.strip()
     if not url.startswith(('http://', 'https://', 't.me/', 'tg://')):
-        await message.answer("❌ Неверная ссылка.", reply_markup=cancel_keyboard()); return
-    if save_button(message.from_user.id, data['new_btn_text'], url):
-        await message.answer(f"✅ Создана: `{data['new_btn_text']}`", parse_mode=ParseMode.MARKDOWN)
-    else:
-        await message.answer("⚠️ Уже есть.")
-    await state.set_state(None)
-    await message.answer("🔘 **Меню кнопок**", reply_markup=post_creation_keyboard())
-
-@dp.message(F.text == "⚡ Быстрый ввод (списком)")
-async def start_quick(message: types.Message, state: FSMContext):
-    await state.update_data(waiting_for_quick_buttons=True)
-    await message.answer("⚡ **Быстрый ввод**\nФормат: `Текст - Ссылка`\n(каждая с новой строки)\n\n❌ Отмена", reply_markup=cancel_keyboard())
-
-@dp.message(F.text == "📚 Выбрать из библиотеки")
-async def open_lib(message: types.Message, state: FSMContext):
-    btns = get_saved_buttons(message.from_user.id)
-    if not btns: await message.answer("📚 Пусто.", reply_markup=post_creation_keyboard()); return
+        await message.answer("❌ Неверная ссылка."); return
+    
     data = await state.get_data()
-    sel = set(data.get('temp_selected', []))
-    await message.answer("**📚 Выберите кнопки:**", parse_mode=ParseMode.MARKDOWN, reply_markup=library_keyboard(btns, sel))
+    if save_button(message.from_user.id, data['new_btn_text'], url):
+        # Добавляем кнопку в текущий черновик
+        buttons = data.get('buttons', [])
+        buttons.append([{'text': data['new_btn_text'], 'url': url}])
+        await state.update_data(buttons=buttons, new_btn_text=None, new_btn_url=None)
+        await state.set_state(None)
+        await update_preview(message, state)
+        await message.answer("✅ Кнопка добавлена!", delete_after=3)
+    else:
+        await message.answer("⚠️ Такая кнопка уже есть.")
+    await message.delete()
 
 @dp.callback_query(lambda c: c.data.startswith('lib:'))
 async def lib_cb(callback: types.CallbackQuery, state: FSMContext):
     parts = callback.data.split(':'); act = parts[1]; uid = callback.from_user.id
+    data = await state.get_data()
+    
     if act == 'toggle':
         bid = int(parts[2]); btns = get_saved_buttons(uid)
         btn = next((b for b in btns if b['id'] == bid), None)
         if not btn: return
-        data = await state.get_data(); sel = set(data.get('temp_selected', []))
-        if bid in sel: sel.remove(bid); msg=f"❌ {btn['text']}"
-        else: sel.add(bid); msg=f"✅ {btn['text']}"
+        sel = set(data.get('temp_selected', []))
+        if bid in sel: sel.remove(bid)
+        else: sel.add(bid)
         await state.update_data(temp_selected=list(sel))
         await callback.message.edit_reply_markup(reply_markup=library_keyboard(get_saved_buttons(uid), sel))
-        await callback.answer(msg)
+        await callback.answer()
+        
     elif act == 'apply':
-        data = await state.get_data(); sels = data.get('temp_selected', [])
+        sels = data.get('temp_selected', [])
         all_b = get_saved_buttons(uid); chosen = [b for b in all_b if b['id'] in sels]
         if not chosen: await callback.answer("⚠️ Ничего не выбрано", show_alert=True); return
-        exist = data.get('buttons', []); exist.extend([[b] for b in chosen])
-        await state.update_data(buttons=exist, temp_selected=[])
+        
+        buttons = data.get('buttons', [])
+        buttons.extend([[b] for b in chosen])
+        await state.update_data(buttons=buttons, temp_selected=[])
         await callback.message.delete()
-        kb = types.InlineKeyboardBuilder()
-        for row in exist:
-            for b in row: kb.button(text=b['text'], url=b['url'])
-        kb.adjust(1)
-        await callback.message.answer("✅ Добавлено!", reply_markup=kb.as_markup())
-        await callback.message.answer("Жмите **✅ Готово**", reply_markup=post_creation_keyboard())
+        await update_preview(callback.message, state) # Обновляем превью с новыми кнопками
+        await callback.message.answer("✅ Кнопки добавлены в превью!", delete_after=3)
         await callback.answer()
+        
     elif act == 'back':
         await callback.message.delete()
-        await callback.message.answer("🔘 **Меню**", reply_markup=post_creation_keyboard())
         await callback.answer()
 
-# ==================== ФИНАЛ ====================
-@dp.message(F.text == "✅ Готово с кнопками")
-async def finish_post(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    txt = data.get('text', ''); btns = data.get('buttons', [])
-    kb = None
-    if btns:
-        b = types.InlineKeyboardBuilder()
-        for row in btns:
-            for x in row: b.button(text=x['text'], url=x['url'])
-        b.adjust(1); kb = b.as_markup()
-    if txt: await message.answer(txt, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    elif kb: await message.answer(" ", reply_markup=kb)
-    await message.answer("✅ **Пост готов!**\n\n1. Нажми на пост выше\n2. Выбери «Переслать»\n3. Выбери чат", parse_mode=ParseMode.MARKDOWN, reply_markup=final_keyboard())
-    await state.clear(); delete_draft(message.from_user.id)
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
-@dp.callback_query(lambda c: c.data.startswith('send:'))
-async def send_cb(callback: types.CallbackQuery):
-    if callback.data.split(':')[1] == 'manual':
-        await callback.message.answer("📤 Нажми на пост → Переслать → Чат")
-        await callback.answer()
+def generate_ai_text(keywords: str) -> str:
+    """Эмулятор ИИ на основе шаблонов"""
+    kws = [k.strip().lower() for k in keywords.split(',')]
+    text_parts = []
+    
+    # Определение темы
+    theme = "travel"
+    if any(k in kws for k in ['тайланд', 'пхукет', 'вьетнам', 'китай']): theme = "asia"
+    elif any(k in kws for k in ['байкал', 'иркутск', 'алтай']): theme = "russia"
+    elif any(k in kws for k in ['дубай', 'египет', 'турция']): theme = "hot"
+    
+    # Заголовок
+    if 'горящий' in kws or 'акция' in kws:
+        title = f"🔥 ГОРЯЩЕЕ ПРЕДЛОЖЕНИЕ: {', '.join(kws[:3]).title()}!"
     else:
-        await callback.answer("👻 В разработке", show_alert=True)
+        title = f"✨ Эксклюзивный тур: {', '.join(kws[:3]).title()}"
+    text_parts.append(title)
+    text_parts.append("")
+    
+    # Тело
+    text_parts.append("Приглашаем вас в незабываемое путешествие!")
+    if 'отель' in kws or '5*' in kws:
+        text_parts.append("🏨 Вас ждет комфортабельный отель высокого уровня.")
+    if 'море' in kws or 'пляж' in kws:
+        text_parts.append("🌊 Кристально чистое море и золотые пляжи.")
+    elif 'лед' in kws or 'байкал' in kws:
+        text_parts.append("🧊 Величие природы и чистейший воздух.")
+        
+    text_parts.append("✈️ Удобный перелет и трансфер включены.")
+    
+    # Цена и призыв
+    if 'цена' in kws or 'скидка' in kws:
+        text_parts.append("")
+        text_parts.append("💰 **Специальная цена** только на этой неделе!")
+    
+    text_parts.append("")
+    text_parts.append("📞 Звоните нам для бронирования!")
+    
+    return "\n".join(text_parts)
+
+async def finish_post_process(message: types.Message, state: FSMContext):
+    """Создает чистый пост в ленте"""
+    data = await state.get_data()
+    txt = data.get('text', '')
+    media_id = data.get('media_id')
+    media_type = data.get('media_type')
+    buttons_data = data.get('buttons', [])
+    
+    # Создаем клавиатуру для готового поста (только ссылки)
+    final_kb = types.InlineKeyboardBuilder()
+    for row in buttons_data:
+        for btn in row:
+            final_kb.button(text=btn['text'], url=btn['url'])
+    if buttons_data: final_kb.adjust(1)
+    
+    # Кнопки управления готовым постом
+    manage_kb = types.InlineKeyboardBuilder()
+    manage_kb.button(text="📤 Инструкция по пересылке", callback_data="final:forward_info")
+    manage_kb.button(text="✏️ Редактировать этот пост", callback_data=f"final:edit:{message.message_id}") # ID пока фейковый, нужна логика сохранения ID поста
+    # УПРОЩЕНИЕ: Кнопка редактировать просто вернет нас в режим создания с текущими данными
+    manage_kb.adjust(2)
+    
+    # Отправляем чистый пост
+    try:
+        if media_type == 'photo' and media_id:
+            await bot.send_photo(chat_id=message.chat.id, photo=media_id, caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=final_kb.as_markup())
+        elif media_type == 'video' and media_id:
+            await bot.send_video(chat_id=message.chat.id, video=media_id, caption=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=final_kb.as_markup())
+        else:
+            await bot.send_message(chat_id=message.chat.id, text=txt, parse_mode=ParseMode.MARKDOWN, reply_markup=final_kb.as_markup())
+            
+        # Под постом добавляем блок управления (отдельным сообщением или прикрепленным? Лучше отдельным для чистоты)
+        await message.answer("✅ **Пост готов!**\nВыберите действие:", reply_markup=manage_kb)
+        
+        # Очищаем состояние и превью
+        uid = message.from_user.id
+        await state.clear()
+        if uid in preview_messages:
+            try: await bot.delete_message(uid, preview_messages[uid])
+            except: pass
+            del preview_messages[uid]
+            
+    except Exception as e:
+        logger.error(f"Ошибка публикации: {e}")
+        await message.answer("❌ Ошибка при публикации поста.")
+
+@dp.callback_query(lambda c: c.data.startswith('final:'))
+async def final_actions(callback: types.CallbackQuery):
+    action = callback.data.split(':')[1]
+    if action == 'forward_info':
+        await callback.answer("Нажмите на пост выше → Переслать → Выберите чат", show_alert=True)
+    elif action == 'edit':
+        # Логика возврата к редактированию (нужно сохранять данные поста в БД по ID)
+        await callback.answer("Функция восстановления данных в разработке. Пока создайте новый пост.", show_alert=True)
 
 async def main():
     await bot.delete_webhook()
