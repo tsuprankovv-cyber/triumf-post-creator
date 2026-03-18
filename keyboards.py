@@ -16,22 +16,32 @@ def cancel_keyboard():
     return builder.as_markup(resize_keyboard=True)
 
 def post_creation_keyboard():
-    """Меню добавления кнопок к посту"""
     builder = ReplyKeyboardBuilder()
     builder.button(text="➕ Добавить новую (по шагам)")
     builder.button(text="⚡ Быстрый ввод (списком)")
     builder.button(text="📚 Выбрать из библиотеки")
     builder.button(text="✅ Готово с кнопками")
     builder.button(text="❌ Отмена")
-    builder.adjust(1, 2, 2) # Красивая раскладка
+    builder.adjust(1, 2, 2)
     return builder.as_markup(resize_keyboard=True)
 
-def text_navigation_keyboard():
-    """Навигация на шаге текста"""
+def text_navigation_keyboard(show_reset: bool = False):
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="◀️ Назад к медиа", callback_data="text:back_to_media"),
-        InlineKeyboardButton(text="✏️ Изменить текст", callback_data="text:edit_mode"),
+        InlineKeyboardButton(text="✏️ Изменить текст", callback_data="text:edit_mode")
+    )
+    if show_reset:
+        builder.row(
+            InlineKeyboardButton(text="🪄 Сделать красиво", callback_data="text:smart_format"),
+            InlineKeyboardButton(text="🔄 Ещё вариант", callback_data="text:smart_format_next"),
+            InlineKeyboardButton(text="↩️ Исходник", callback_data="text:smart_reset")
+        )
+    else:
+        builder.row(
+            InlineKeyboardButton(text="🪄 Сделать красиво", callback_data="text:smart_format")
+        )
+    builder.row(
         InlineKeyboardButton(text="Вперёд к кнопкам ▶️", callback_data="text:next_to_buttons")
     )
     return builder.as_markup()
@@ -45,27 +55,18 @@ def media_navigation_keyboard():
     return builder.as_markup()
 
 def library_keyboard(buttons: list, selected_ids: set = None):
-    if selected_ids is None:
-        selected_ids = set()
-    
+    if selected_ids is None: selected_ids = set()
     builder = InlineKeyboardBuilder()
     for btn in buttons:
-        is_selected = btn['id'] in selected_ids
-        icon = "✅" if is_selected else "🔘"
-        display_text = btn['text'][:25] + "..." if len(btn['text']) > 25 else btn['text']
-        builder.button(
-            text=f"{icon} {display_text}",
-            callback_data=f"lib:toggle:{btn['id']}"
-        )
-    
+        icon = "✅" if btn['id'] in selected_ids else "🔘"
+        txt = btn['text'][:25] + "..." if len(btn['text']) > 25 else btn['text']
+        builder.button(text=f"{icon} {txt}", callback_data=f"lib:toggle:{btn['id']}")
     builder.adjust(2)
     builder.row(
-        InlineKeyboardButton(text="✅ Применить выбранные", callback_data="lib:apply"),
-        InlineKeyboardButton(text="🔄 Сбросить выбор", callback_data="lib:clear")
+        InlineKeyboardButton(text="✅ Применить", callback_data="lib:apply"),
+        InlineKeyboardButton(text="🔄 Сбросить", callback_data="lib:clear")
     )
-    builder.row(
-        InlineKeyboardButton(text="◀️ Назад", callback_data="lib:back")
-    )
+    builder.row(InlineKeyboardButton(text="◀️ Назад", callback_data="lib:back"))
     return builder.as_markup()
 
 def final_keyboard():
