@@ -2,11 +2,13 @@
 from aiogram.fsm.state import State, StatesGroup
 
 class PostWorkflow(StatesGroup):
-    selecting_media = State()
-    writing_text = State()
-    adding_buttons = State()
-    ai_input = State()  # <-- ДОБАВЛЕНО: Состояние для ввода ключевых слов ИИ
+    """Основные состояния workflow создания поста"""
+    selecting_media = State()       # Выбор медиа (фото/видео)
+    writing_text = State()          # Написание или редактирование текста
+    adding_buttons = State()        # Добавление кнопок
+    ai_input = State()              # Ввод ключевых слов для ИИ-генератора
 
 class AddButtonSteps(StatesGroup):
-    waiting_for_text = State()
-    waiting_for_url = State()
+    """Состояния для пошагового добавления одной кнопки"""
+    waiting_for_text = State()      # Ожидание текста кнопки
+    waiting_for_url = State()       # Ожидание ссылки кнопки
