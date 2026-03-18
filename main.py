@@ -7,496 +7,276 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
 
+# ИМПОРТЫ НАШИХ МОДУЛЕЙ
 from states import PostWorkflow, AddButtonSteps
-from keyboards import (
-    main_keyboard, cancel_keyboard, post_creation_keyboard,
-    media_navigation_keyboard, text_navigation_keyboard, library_keyboard, final_keyboard
-)
+from keyboards import main_keyboard, cancel_keyboard, post_creation_keyboard, media_navigation_keyboard, text_navigation_keyboard, library_keyboard, final_keyboard
 from database import init_db, save_button, get_saved_buttons, delete_button, save_draft, get_draft, delete_draft
+from smart_text import smart_format_text  # <-- ВАЖНО: Импорт нового модуля
 
-# === НАСТРОЙКА ЛОГИРОВАНИЯ ===
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('bot_debug.log', encoding='utf-8', mode='a')
-    ]
-)
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    handlers=[logging.StreamHandler(), logging.FileHandler('bot_debug.log', encoding='utf-8', mode='a')])
 logger = logging.getLogger(__name__)
 
-# === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-if not BOT_TOKEN:
-    raise ValueError("❌ Нет токена! Добавьте BOT_TOKEN в переменные окружения.")
+if not BOT_TOKEN: raise ValueError("❌ Нет токена!")
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
-
-# === ИНИЦИАЛИЗАЦИЯ ===
 init_db()
 
-logger.info("="*60)
-logger.info("🚀 ПОСТ-ТРИУМФ ЗАПУСКАЕТСЯ")
-logger.info(f"🤖 Bot ID: {bot.id}")
-logger.info("="*60)
+logger.info("="*60 + "\n🚀 ПОСТ-ТРИУМФ ЗАПУСКАЕТСЯ\n" + "="*60)
 
-# ==================== СТАРТ И МЕНЮ ====================
-
+# ==================== СТАРТ ====================
 @dp.message(Command('start'))
 @dp.message(F.text == "❓ Помощь")
 async def cmd_start(message: types.Message):
-    await message.answer(
-        "🤖 **Пост-Триумф** — Конструктор постов\n\n"
-        "➕ **Новый пост** — создать пост по шагам\n"
-        "📚 **Мои кнопки** — библиотека кнопок\n"
-        "❓ **Помощь** — эта инструкция",
-        parse_mode=ParseMode.MARKDOWN, 
-        reply_markup=main_keyboard()
-    )
+    await message.answer("🤖 **Пост-Триумф**\n\n➕ Новый пост | 📚 Мои кнопки | ❓ Помощь", parse_mode=ParseMode.MARKDOWN, reply_markup=main_keyboard())
 
 @dp.message(F.text == "❌ Отмена")
 async def cmd_cancel(message: types.Message, state: FSMContext):
-    logger.info(f"👤 User {message.from_user.id} отменил действие")
-    await state.clear()
-    delete_draft(message.from_user.id)
-    await message.answer("❌ Действие отменено.", reply_markup=main_keyboard())
+    await state.clear(); delete_draft(message.from_user.id)
+    await message.answer("❌ Отменено.", reply_markup=main_keyboard())
 
 # ==================== ШАГ 1: МЕДИА ====================
-
 @dp.message(F.text == "➕ Новый пост")
 @dp.message(Command('new'))
 async def cmd_new(message: types.Message, state: FSMContext):
-    logger.info(f"👤 User {message.from_user.id} начал создание поста")
     await state.set_state(PostWorkflow.selecting_media)
-    await message.answer(
-        "📷 **ШАГ 1: Медиа**\n\n"
-        "Отправьте фото или видео для поста.\n"
-        "Если медиа не нужно, нажмите кнопку ниже ⬇️",
-        reply_markup=media_navigation_keyboard()
-    )
+    await message.answer("📷 **ШАГ 1: Медиа**\n\nОтправьте фото/видео или нажмите ⏭️ Пропустить", reply_markup=media_navigation_keyboard())
 
 @dp.callback_query(lambda c: c.data.startswith('media:'))
 async def media_callback(callback: types.CallbackQuery, state: FSMContext):
     action = callback.data.split(':')[1]
-    user_id = callback.from_user.id
-    
+    uid = callback.from_user.id
     if action == 'skip':
-        logger.info(f"👤 User {user_id} пропустил медиа")
         await state.update_data(media_type=None, media_id=None)
-        save_draft(user_id, {}, 'selecting_media')
-        await goto_text_step(callback.message, state, user_id)
+        save_draft(uid, {}, 'selecting_media')
+        await goto_text_step(callback.message, state, uid)
         await callback.answer("⏭️ Пропущено")
-        
     elif action == 'done':
         data = await state.get_data()
         if data.get('media_id'):
-            logger.info(f"👤 User {user_id} завершил шаг медиа")
-            await goto_text_step(callback.message, state, user_id)
+            await goto_text_step(callback.message, state, uid)
             await callback.answer("✅ Переход к тексту")
         else:
-            await callback.answer("⚠️ Сначала отправьте фото/видео или нажмите 'Пропустить'", show_alert=True)
+            await callback.answer("⚠️ Сначала отправьте медиа или нажмите 'Пропустить'", show_alert=True)
 
 @dp.message(PostWorkflow.selecting_media, F.photo)
 async def handle_photo(message: types.Message, state: FSMContext):
-    media_id = message.photo[-1].file_id
-    await state.update_data(media_type='photo', media_id=media_id)
-    save_draft(message.from_user.id, {'media_type': 'photo', 'media_id': media_id}, 'selecting_media')
+    await state.update_data(media_type='photo', media_id=message.photo[-1].file_id)
+    save_draft(message.from_user.id, {'media_type': 'photo', 'media_id': message.photo[-1].file_id}, 'selecting_media')
     await goto_text_step(message, state, message.from_user.id)
 
 @dp.message(PostWorkflow.selecting_media, F.video)
 async def handle_video(message: types.Message, state: FSMContext):
-    media_id = message.video.file_id
-    await state.update_data(media_type='video', media_id=media_id)
-    save_draft(message.from_user.id, {'media_type': 'video', 'media_id': media_id}, 'selecting_media')
+    await state.update_data(media_type='video', media_id=message.video.file_id)
+    save_draft(message.from_user.id, {'media_type': 'video', 'media_id': message.video.file_id}, 'selecting_media')
     await goto_text_step(message, state, message.from_user.id)
 
-# --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ПЕРЕХОДА К ТЕКСТУ ---
-async def goto_text_step(target_message, state: FSMContext, user_id: int):
+async def goto_text_step(target_message, state: FSMContext, uid: int):
     await state.set_state(PostWorkflow.writing_text)
     data = await state.get_data()
-    current_text = data.get('text', "")
+    curr = data.get('text', "")
+    orig = data.get('original_text', "")
     
-    # Текст подсказки с примерами форматирования
-    format_help = (
-        "💡 **Поддерживается форматирование:**\n"
-        "`**жирный**` → **жирный**\n"
-        "`*курсив*` → *курсив*\n"
-        "`__подчёркнутый__` → __подчёркнутый__\n"
-        "`~~зачёркнутый~~` → ~~зачёркнутый~~\n\n"
-        "🤖 **Умное форматирование:**\n"
-        "Нажмите кнопку «🪄 Сделать красиво», чтобы бот сам расставил акценты и эмодзи."
-    )
+    # Сохраняем оригинал при первом входе
+    if curr and not orig:
+        await state.update_data(original_text=curr)
+        save_draft(uid, {'text': curr, 'original_text': curr}, 'writing_text')
+        
+    has_fmt = bool(orig and curr != orig)
+    txt = "✍️ **ШАГ 2: Текст поста**\n\n"
+    if curr:
+        prev = curr[:150] + "..." if len(curr) > 150 else curr
+        txt += f"📝 *Текущий:* _{prev}_\n\n"
+    txt += "💡 Поддерживается: `**жирный**`, `*курсив*`\n\n🤖 Нажмите «🪄 Сделать красиво» для авто-оформления."
+    await target_message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=text_navigation_keyboard(show_reset=has_fmt))
 
-    if current_text:
-        txt = (
-            f"✍️ **ШАГ 2: Текст поста**\n\n"
-            f"✅ Текст уже сохранён:\n_{current_text[:200]}{'...' if len(current_text)>200 else ''}_\n\n"
-            f"🔹 Чтобы **изменить**: просто отправьте новый текст сообщением.\n"
-            f"🔹 Чтобы **оставить как есть**: нажмите «Вперёд к кнопкам ▶️».\n"
-            f"🔹 Чтобы **исправить ошибку**: нажмите «✏️ Изменить текст».\n\n"
-            f"{format_help}"
-        )
-        kb = text_navigation_keyboard()
-    else:
-        txt = (
-            f"✍️ **ШАГ 2: Текст поста**\n\n"
-            f"Напишите текст вашего поста.\n\n"
-            f"{format_help}"
-        )
-        kb = text_navigation_keyboard()
-    
-    await target_message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
-
-# ==================== ШАГ 2: ТЕКСТ (НАВИГАЦИЯ) ====================
-
+# ==================== ШАГ 2: ТЕКСТ И ФОРМАТИРОВАНИЕ ====================
 @dp.callback_query(lambda c: c.data.startswith('text:'))
 async def text_callback(callback: types.CallbackQuery, state: FSMContext):
     action = callback.data.split(':')[1]
-    user_id = callback.from_user.id
-    
+    uid = callback.from_user.id
+    data = await state.get_data()
+    curr = data.get('text', "")
+    orig = data.get('original_text', "")
+
+    if not curr and action.startswith('smart'):
+        await callback.answer("⚠️ Сначала введите текст!", show_alert=True); return
+
     if action == 'back_to_media':
         await state.set_state(PostWorkflow.selecting_media)
-        data = await state.get_data()
-        has_media = bool(data.get('media_id'))
-        
-        txt = "📷 **Редактирование медиа**\n\n"
-        if has_media:
-            txt += "✅ Фото/видео загружено.\nОтправьте новое, чтобы заменить, или нажмите «Пропустить»."
-        else:
-            txt += "Медиа не выбрано."
-            
-        await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=media_navigation_keyboard())
+        has_m = bool(data.get('media_id'))
+        await callback.message.edit_text(f"📷 **Медиа**\n\n{'✅ Загружено.' if has_m else 'Не выбрано.'}", reply_markup=media_navigation_keyboard())
         await callback.answer()
-        
     elif action == 'next_to_buttons':
-        await callback.message.answer(
-            "🔘 **ШАГ 3: Кнопки**\n\n"
-            "Добавьте кнопки под постом для переходов.\n"
-            "Выберите удобный способ:",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=post_creation_keyboard()
-        )
+        await callback.message.answer("🔘 **ШАГ 3: Кнопки**\n\nВыберите способ:", reply_markup=post_creation_keyboard())
         await callback.answer()
-        
     elif action == 'edit_mode':
-        await callback.message.answer(
-            "✏️ **Редактирование текста**\n\n"
-            "Отправьте новый текст, чтобы заменить текущий.\n"
-            "Или нажмите «Отмена», если передумали.",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=cancel_keyboard()
-        )
-        await callback.answer("Жду ваш текст...")
-        
+        await callback.message.answer("✏️ **Отправьте новый текст:**", reply_markup=cancel_keyboard())
+        await callback.answer()
     elif action == 'smart_format':
-        # Логика умного форматирования (заглушка для примера)
-        data = await state.get_data()
-        current_text = data.get('text', "")
-        if not current_text:
-            await callback.answer("⚠️ Сначала введите текст!", show_alert=True)
-            return
-        
-        # Простая эмуляция: добавляем эмодзи и делаем заголовок жирным
-        lines = current_text.split('\n')
-        if len(lines) > 0 and not lines[0].startswith('**'):
-            lines[0] = f"**{lines[0]}**" # Делаем первую строку жирной
-        formatted_text = "\n".join(lines)
-        if "🔥" not in formatted_text:
-            formatted_text = "🔥 " + formatted_text
-            
-        await state.update_data(text=formatted_text)
-        save_draft(user_id, {'text': formatted_text}, 'writing_text')
-        
-        await callback.message.answer(
-            f"🪄 **Текст отформатирован!**\n\n_{formatted_text[:100]}..._\n\n"
-            f"Можете отправить новый текст или нажать «Вперёд».",
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=text_navigation_keyboard()
-        )
-        await callback.answer("Готово!")
+        await state.update_data(smart_variant=0)
+        res = smart_format_text(curr, 0)
+        await apply_smart(state, callback, uid, res['text'], res['style_name'])
+    elif action == 'smart_format_next':
+        v = data.get('smart_variant', 0) + 1
+        await state.update_data(smart_variant=v)
+        res = smart_format_text(curr, v)
+        await apply_smart(state, callback, uid, res['text'], res['style_name'])
+    elif action == 'smart_reset':
+        if orig:
+            await state.update_data(text=orig, smart_variant=-1)
+            save_draft(uid, {'text': orig}, 'writing_text')
+            await callback.message.answer("↩️ **Текст сброшен к исходнику.**", reply_markup=text_navigation_keyboard(show_reset=False))
+            await callback.answer("Сброшено")
+        else:
+            await callback.answer("Нет исходника", show_alert=True)
 
-# ==================== ОБРАБОТКА ТЕКСТА И БЫСТРЫЙ ВВОД КНОПОК ====================
+async def apply_smart(state, callback, uid, text, style):
+    await state.update_data(text=text)
+    save_draft(uid, {'text': text}, 'writing_text')
+    prev = text[:200] + "..." if len(text) > 200 else text
+    await callback.message.answer(f"🪄 **Стиль: {style}**\n\n{prev}\n\nЖмите «🔄 Ещё» или «↩️ Исходник».", parse_mode=ParseMode.MARKDOWN, reply_markup=text_navigation_keyboard(show_reset=True))
+    await callback.answer("Готово!")
 
 @dp.message(PostWorkflow.writing_text, F.text)
-async def handle_text_and_quick_input(message: types.Message, state: FSMContext):
+async def handle_text_logic(message: types.Message, state: FSMContext):
     data = await state.get_data()
     
-    # --- РЕЖИМ 1: БЫСТРЫЙ ВВОД КНОПОК (СПИСКОМ) ---
+    # Быстрый ввод кнопок (если активен флаг)
     if data.get('waiting_for_quick_buttons'):
         if message.text == "❌ Отмена":
             await state.update_data(waiting_for_quick_buttons=False)
-            await cmd_cancel(message, state)
-            return
-
+            await cmd_cancel(message, state); return
+        
         lines = message.text.strip().split('\n')
-        created_count = 0
-        
-        logger.info(f"👤 User {message.from_user.id} пытается быстрый ввод кнопок: {len(lines)} строк")
-        
+        count = 0
         for line in lines:
-            if ' - ' in line:
-                parts = line.split(' - ', 1)
-            elif '-' in line:
-                parts = line.split('-', 1)
-            else:
-                continue
-                
+            parts = line.split(' - ', 1) if ' - ' in line else line.split('-', 1)
             if len(parts) == 2:
-                btn_text = parts[0].strip()
-                btn_url = parts[1].strip()
-                
-                if btn_url.startswith(('http://', 'https://', 't.me/', 'tg://')):
-                    if save_button(message.from_user.id, btn_text, btn_url):
-                        created_count += 1
-                        logger.info(f"✅ Кнопка создана: {btn_text}")
+                t, u = parts[0].strip(), parts[1].strip()
+                if u.startswith(('http://', 'https://', 't.me/', 'tg://')):
+                    if save_button(message.from_user.id, t, u): count += 1
         
         await state.update_data(waiting_for_quick_buttons=False)
-        
-        if created_count > 0:
-            await message.answer(f"✅ **Создано кнопок: {created_count}!**\nОни сохранены в библиотеку.", parse_mode=ParseMode.MARKDOWN)
-        else:
-            await message.answer("⚠️ Не удалось распознать ни одной кнопки.\nПроверьте формат: `Текст - Ссылка`", parse_mode=ParseMode.MARKDOWN)
-        
-        await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
+        msg = f"✅ Создано кнопок: {count}!" if count > 0 else "⚠️ Не распознано. Формат: `Текст - Ссылка`"
+        await message.answer(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
         return
 
-    # --- РЕЖИМ 2: ОБЫЧНЫЙ ТЕКСТ ПОСТА ---
+    # Обычный текст
+    ignore = ["◀️ Назад к медиа", "Вперёд к кнопкам ▶️", "✏️ Изменить текст", "➕ Добавить новую (по шагам)", "⚡ Быстрый ввод (списком)", "📚 Выбрать из библиотеки", "✅ Готово с кнопками"]
+    if message.text in ignore: return
+    if message.text == "❌ Отмена": await cmd_cancel(message, state); return
     
-    ignore_texts = [
-        "◀️ Назад к медиа", "Вперёд к кнопкам ▶️", "✏️ Изменить текст", 
-        "➕ Добавить новую (по шагам)", "⚡ Быстрый ввод (списком)", 
-        "📚 Выбрать из библиотеки", "✅ Готово с кнопками", "🪄 Сделать красиво"
-    ]
-    if message.text in ignore_texts:
-        return
-        
-    if message.text == "❌ Отмена":
-        await cmd_cancel(message, state)
-        return
-    
-    text_len = len(message.text)
-    logger.info(f"👤 User {message.from_user.id} сохранил текст поста ({text_len} симв.)")
-    
-    await state.update_data(text=message.text)
-    save_draft(message.from_user.id, {'text': message.text}, 'writing_text')
-    
-    await message.answer(
-        f"✅ **Текст сохранён!** ({text_len} симв.)\n\n"
-        f"Теперь выберите действие с кнопками:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=post_creation_keyboard()
-    )
+    txt = message.text
+    # Обновляем и текст, и оригинал при ручном вводе
+    await state.update_data(text=txt, original_text=txt, smart_variant=-1)
+    save_draft(message.from_user.id, {'text': txt, 'original_text': txt}, 'writing_text')
+    await message.answer(f"✅ **Текст сохранён!** ({len(txt)} симв.)", reply_markup=text_navigation_keyboard(show_reset=False))
 
-# ==================== ШАГ 3: КНОПКИ (ЛОГИКА) ====================
-
+# ==================== ШАГ 3: КНОПКИ ====================
 @dp.message(F.text == "📚 Мои кнопки")
 async def cmd_my_buttons(message: types.Message):
-    buttons = get_saved_buttons(message.from_user.id)
-    if not buttons:
-        await message.answer("📚 Ваша библиотека пуста.", parse_mode=ParseMode.MARKDOWN, reply_markup=main_keyboard())
-        return
-    await message.answer("**📚 Ваши сохранённые кнопки:**", parse_mode=ParseMode.MARKDOWN, reply_markup=library_keyboard(buttons))
+    btns = get_saved_buttons(message.from_user.id)
+    if not btns: await message.answer("📚 Пусто.", reply_markup=main_keyboard()); return
+    await message.answer("**📚 Кнопки:**", parse_mode=ParseMode.MARKDOWN, reply_markup=library_keyboard(btns))
 
-# --- РЕЖИМ А: ПОШАГОВОЕ СОЗДАНИЕ ---
 @dp.message(F.text == "➕ Добавить новую (по шагам)")
-async def start_add_button_step(message: types.Message, state: FSMContext):
-    logger.info(f"👤 User {message.from_user.id} начал пошаговое добавление кнопки")
+async def start_add_step(message: types.Message, state: FSMContext):
     await state.update_data(new_btn_text=None, new_btn_url=None)
     await state.set_state(AddButtonSteps.waiting_for_text)
-    
-    await message.answer(
-        "🔘 **СОЗДАНИЕ КНОПКИ (ПО ШАГАМ)**\n\n"
-        "1️⃣ Введите **название (текст)** кнопки.\n\n"
-        "📝 *Пример:* `Наш сайт`, `Заказать`",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=cancel_keyboard()
-    )
+    await message.answer("1️⃣ **Введите текст кнопки:**", reply_markup=cancel_keyboard())
 
 @dp.message(AddButtonSteps.waiting_for_text, F.text)
-async def process_button_text(message: types.Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await cmd_cancel(message, state)
-        return
-    
-    btn_text = message.text.strip()
-    if len(btn_text) > 50:
-        await message.answer("⚠️ Текст слишком длинный. Попробуйте короче.", parse_mode=ParseMode.MARKDOWN)
-        return
-
-    await state.update_data(new_btn_text=btn_text)
+async def proc_btn_text(message: types.Message, state: FSMContext):
+    if message.text == "❌ Отмена": await cmd_cancel(message, state); return
+    await state.update_data(new_btn_text=message.text.strip())
     await state.set_state(AddButtonSteps.waiting_for_url)
-    
-    await message.answer(
-        f"✅ Название принято: **«{btn_text}»**\n\n"
-        "2️⃣ Теперь введите **ссылку**.\n\n"
-        "🔗 *Пример:* `https://mysite.ru`",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=cancel_keyboard()
-    )
+    await message.answer(f"2️⃣ **Введите ссылку для «{message.text}»:**", reply_markup=cancel_keyboard())
 
 @dp.message(AddButtonSteps.waiting_for_url, F.text)
-async def process_button_url(message: types.Message, state: FSMContext):
-    if message.text == "❌ Отмена":
-        await cmd_cancel(message, state)
-        return
-    
+async def proc_btn_url(message: types.Message, state: FSMContext):
+    if message.text == "❌ Отмена": await cmd_cancel(message, state); return
     data = await state.get_data()
-    btn_text = data.get('new_btn_text')
-    btn_url = message.text.strip()
-    
-    if not btn_url.startswith(('http://', 'https://', 't.me/', 'tg://')):
-        await message.answer("❌ Ошибка: Ссылка должна начинаться с `http://`, `https://`, `t.me/`.\nПопробуйте ещё раз:", parse_mode=ParseMode.MARKDOWN, reply_markup=cancel_keyboard())
-        return
-    
-    if save_button(message.from_user.id, btn_text, btn_url):
-        await message.answer(f"🎉 **Кнопка создана!**\n📝 `{btn_text}`\n🔗 `{btn_url}`", parse_mode=ParseMode.MARKDOWN)
+    url = message.text.strip()
+    if not url.startswith(('http://', 'https://', 't.me/', 'tg://')):
+        await message.answer("❌ Неверная ссылка.", reply_markup=cancel_keyboard()); return
+    if save_button(message.from_user.id, data['new_btn_text'], url):
+        await message.answer(f"✅ Создана: `{data['new_btn_text']}`", parse_mode=ParseMode.MARKDOWN)
     else:
-        await message.answer("⚠️ Такая кнопка уже есть.", parse_mode=ParseMode.MARKDOWN)
-    
-    await state.set_state(None) 
-    await state.update_data(new_btn_text=None, new_btn_url=None)
-    await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
+        await message.answer("⚠️ Уже есть.")
+    await state.set_state(None)
+    await message.answer("🔘 **Меню кнопок**", reply_markup=post_creation_keyboard())
 
-# --- РЕЖИМ Б: БЫСТРЫЙ ВВОД ---
 @dp.message(F.text == "⚡ Быстрый ввод (списком)")
-async def start_quick_add(message: types.Message, state: FSMContext):
-    logger.info(f"👤 User {message.from_user.id} начал быстрый ввод кнопок")
+async def start_quick(message: types.Message, state: FSMContext):
     await state.update_data(waiting_for_quick_buttons=True)
-    
-    await message.answer(
-        "⚡ **БЫСТРЫЙ ВВОД КНОПОК**\n\n"
-        "Отправьте список кнопок в формате:\n"
-        "`Текст кнопки - Ссылка`\n\n"
-        "Можно сразу несколько, каждая с новой строки:\n\n"
-        "📝 *Пример:* \n"
-        "`Подобрать тур - https://vCard.guru/olga.tsuprankova`\n"
-        "`Оставить заявку - https://forms.yandex.ru/...`\n\n"
-        "❌ Отмена — выйти",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=cancel_keyboard()
-    )
+    await message.answer("⚡ **Быстрый ввод**\nФормат: `Текст - Ссылка`\n(каждая с новой строки)\n\n❌ Отмена", reply_markup=cancel_keyboard())
 
-# --- ВЫБОР ИЗ БИБЛИОТЕКИ ---
 @dp.message(F.text == "📚 Выбрать из библиотеки")
-async def open_library_for_post(message: types.Message, state: FSMContext):
-    buttons = get_saved_buttons(message.from_user.id)
-    if not buttons:
-        await message.answer("📚 Библиотека пуста. Создайте кнопки через «➕ Добавить новую» или «⚡ Быстрый ввод».", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
-        return
-    
+async def open_lib(message: types.Message, state: FSMContext):
+    btns = get_saved_buttons(message.from_user.id)
+    if not btns: await message.answer("📚 Пусто.", reply_markup=post_creation_keyboard()); return
     data = await state.get_data()
-    temp_selected = set(data.get('temp_selected', []))
-    
-    await message.answer(
-        "**📚 ВЫБОР КНОПОК**\n\n"
-        "Нажимайте на кнопки ниже, чтобы выбрать их (появится ✅).\n"
-        "Когда выберете все нужные, нажмите «✅ Применить выбранные».",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=library_keyboard(buttons, temp_selected)
-    )
+    sel = set(data.get('temp_selected', []))
+    await message.answer("**📚 Выберите кнопки:**", parse_mode=ParseMode.MARKDOWN, reply_markup=library_keyboard(btns, sel))
 
 @dp.callback_query(lambda c: c.data.startswith('lib:'))
-async def library_callback(callback: types.CallbackQuery, state: FSMContext):
-    parts = callback.data.split(':')
-    action = parts[1]
-    user_id = callback.from_user.id
-    
-    if action == 'toggle':
-        button_id = int(parts[2])
-        buttons = get_saved_buttons(user_id)
-        btn = next((b for b in buttons if b['id'] == button_id), None)
+async def lib_cb(callback: types.CallbackQuery, state: FSMContext):
+    parts = callback.data.split(':'); act = parts[1]; uid = callback.from_user.id
+    if act == 'toggle':
+        bid = int(parts[2]); btns = get_saved_buttons(uid)
+        btn = next((b for b in btns if b['id'] == bid), None)
         if not btn: return
-        
-        data = await state.get_data()
-        selected = set(data.get('temp_selected', []))
-        
-        if button_id in selected:
-            selected.remove(button_id)
-            msg = f"❌ Убрано: {btn['text']}"
-        else:
-            selected.add(button_id)
-            msg = f"✅ Выбрано: {btn['text']}"
-        
-        await state.update_data(temp_selected=list(selected))
-        all_buttons = get_saved_buttons(user_id)
-        await callback.message.edit_reply_markup(reply_markup=library_keyboard(all_buttons, selected))
+        data = await state.get_data(); sel = set(data.get('temp_selected', []))
+        if bid in sel: sel.remove(bid); msg=f"❌ {btn['text']}"
+        else: sel.add(bid); msg=f"✅ {btn['text']}"
+        await state.update_data(temp_selected=list(sel))
+        await callback.message.edit_reply_markup(reply_markup=library_keyboard(get_saved_buttons(uid), sel))
         await callback.answer(msg)
-
-    elif action == 'apply':
-        data = await state.get_data()
-        selected_ids = data.get('temp_selected', [])
-        all_buttons = get_saved_buttons(user_id)
-        selected_buttons = [b for b in all_buttons if b['id'] in selected_ids]
-        
-        if not selected_buttons:
-            await callback.answer("⚠️ Вы не выбрали ни одной кнопки!", show_alert=True)
-            return
-
-        existing = data.get('buttons', [])
-        existing.extend([[btn] for btn in selected_buttons])
-        
-        await state.update_data(buttons=existing, temp_selected=[])
+    elif act == 'apply':
+        data = await state.get_data(); sels = data.get('temp_selected', [])
+        all_b = get_saved_buttons(uid); chosen = [b for b in all_b if b['id'] in sels]
+        if not chosen: await callback.answer("⚠️ Ничего не выбрано", show_alert=True); return
+        exist = data.get('buttons', []); exist.extend([[b] for b in chosen])
+        await state.update_data(buttons=exist, temp_selected=[])
         await callback.message.delete()
-        
-        builder = types.InlineKeyboardBuilder()
-        for row in existing:
-            for b in row:
-                builder.button(text=b['text'], url=b['url'])
-        builder.adjust(1)
-        
-        await callback.message.answer("✅ Кнопки добавлены к посту!", parse_mode=ParseMode.MARKDOWN, reply_markup=builder.as_markup())
-        await callback.message.answer("Продолжайте или нажмите **✅ Готово с кнопками**", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
+        kb = types.InlineKeyboardBuilder()
+        for row in exist:
+            for b in row: kb.button(text=b['text'], url=b['url'])
+        kb.adjust(1)
+        await callback.message.answer("✅ Добавлено!", reply_markup=kb.as_markup())
+        await callback.message.answer("Жмите **✅ Готово**", reply_markup=post_creation_keyboard())
         await callback.answer()
-        
-    elif action == 'back':
+    elif act == 'back':
         await callback.message.delete()
-        await callback.message.answer("🔘 **МЕНЮ КНОПОК**", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
+        await callback.message.answer("🔘 **Меню**", reply_markup=post_creation_keyboard())
         await callback.answer()
 
 # ==================== ФИНАЛ ====================
-
 @dp.message(F.text == "✅ Готово с кнопками")
 async def finish_post(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    text = data.get('text', '')
-    buttons = data.get('buttons', [])
-    
+    txt = data.get('text', ''); btns = data.get('buttons', [])
     kb = None
-    if buttons:
-        builder = types.InlineKeyboardBuilder()
-        for row in buttons:
-            for btn in row:
-                builder.button(text=btn['text'], url=btn['url'])
-        builder.adjust(1)
-        kb = builder.as_markup()
-    
-    if text:
-        await message.answer(text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
-    elif kb:
-        await message.answer(" ", reply_markup=kb)
-        
-    await message.answer(
-        "✅ **Пост готов к публикации!**\n\n"
-        "📤 **Как отправить:**\n"
-        "1. Нажмите на сообщение с постом выше 👆\n"
-        "2. Выберите «Переслать»\n"
-        "3. Выберите нужный чат",
-        parse_mode=ParseMode.MARKDOWN, 
-        reply_markup=final_keyboard()
-    )
-    
-    await state.clear()
-    delete_draft(message.from_user.id)
+    if btns:
+        b = types.InlineKeyboardBuilder()
+        for row in btns:
+            for x in row: b.button(text=x['text'], url=x['url'])
+        b.adjust(1); kb = b.as_markup()
+    if txt: await message.answer(txt, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+    elif kb: await message.answer(" ", reply_markup=kb)
+    await message.answer("✅ **Пост готов!**\n\n1. Нажми на пост выше\n2. Выбери «Переслать»\n3. Выбери чат", parse_mode=ParseMode.MARKDOWN, reply_markup=final_keyboard())
+    await state.clear(); delete_draft(message.from_user.id)
 
 @dp.callback_query(lambda c: c.data.startswith('send:'))
-async def send_callback(callback: types.CallbackQuery):
-    action = callback.data.split(':')[1]
-    if action == 'manual':
-        await callback.message.answer("📤 **Инструкция:**\n1. Найди пост выше 👆\n2. Нажми «Переслать»\n3. Выбери чат", parse_mode=ParseMode.MARKDOWN)
+async def send_cb(callback: types.CallbackQuery):
+    if callback.data.split(':')[1] == 'manual':
+        await callback.message.answer("📤 Нажми на пост → Переслать → Чат")
         await callback.answer()
-    elif action == 'anonymous':
+    else:
         await callback.answer("👻 В разработке", show_alert=True)
 
 async def main():
