@@ -16,36 +16,31 @@ def cancel_keyboard():
     return builder.as_markup(resize_keyboard=True)
 
 def post_creation_keyboard():
+    """Меню добавления кнопок к посту"""
     builder = ReplyKeyboardBuilder()
+    builder.button(text="➕ Добавить новую (по шагам)")
+    builder.button(text="⚡ Быстрый ввод (списком)")
     builder.button(text="📚 Выбрать из библиотеки")
-    builder.button(text="➕ Добавить новую")
     builder.button(text="✅ Готово с кнопками")
     builder.button(text="❌ Отмена")
-    builder.adjust(2, 2)
+    builder.adjust(1, 2, 2) # Красивая раскладка
     return builder.as_markup(resize_keyboard=True)
 
-def add_button_mode_keyboard():
-    """Выбор способа добавления кнопки"""
-    builder = ReplyKeyboardBuilder()
-    builder.button(text="➕ По шагам (текст → ссылка)")
-    builder.button(text="⚡ Быстро (текст - ссылка)")
-    builder.button(text="◀️ Назад")
-    builder.adjust(1, 2)
-    return builder.as_markup(resize_keyboard=True)
+def text_navigation_keyboard():
+    """Навигация на шаге текста"""
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="◀️ Назад к медиа", callback_data="text:back_to_media"),
+        InlineKeyboardButton(text="✏️ Изменить текст", callback_data="text:edit_mode"),
+        InlineKeyboardButton(text="Вперёд к кнопкам ▶️", callback_data="text:next_to_buttons")
+    )
+    return builder.as_markup()
 
 def media_navigation_keyboard():
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="⏭️ Пропустить", callback_data="media:skip"),
         InlineKeyboardButton(text="✅ Готово", callback_data="media:done")
-    )
-    return builder.as_markup()
-
-def text_navigation_keyboard():
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="◀️ Назад к медиа", callback_data="text:back_to_media"),
-        InlineKeyboardButton(text="Вперёд к кнопкам ▶️", callback_data="text:next_to_buttons")
     )
     return builder.as_markup()
 
@@ -65,8 +60,8 @@ def library_keyboard(buttons: list, selected_ids: set = None):
     
     builder.adjust(2)
     builder.row(
-        InlineKeyboardButton(text="✅ Применить", callback_data="lib:apply"),
-        InlineKeyboardButton(text="🔄 Сбросить", callback_data="lib:clear")
+        InlineKeyboardButton(text="✅ Применить выбранные", callback_data="lib:apply"),
+        InlineKeyboardButton(text="🔄 Сбросить выбор", callback_data="lib:clear")
     )
     builder.row(
         InlineKeyboardButton(text="◀️ Назад", callback_data="lib:back")
