@@ -14,20 +14,27 @@ from keyboards import (
 )
 from database import init_db, save_button, get_saved_buttons, delete_button, save_draft, get_draft, delete_draft
 
+# === НАСТРОЙКА ЛОГИРОВАНИЯ ===
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(), logging.FileHandler('bot_debug.log', encoding='utf-8', mode='a')]
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('bot_debug.log', encoding='utf-8', mode='a')
+    ]
 )
 logger = logging.getLogger(__name__)
 
+# === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 if not BOT_TOKEN:
-    raise ValueError("❌ Нет токена!")
+    raise ValueError("❌ Нет токена! Добавьте BOT_TOKEN в переменные окружения.")
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
+
+# === ИНИЦИАЛИЗАЦИЯ ===
 init_db()
 
 logger.info("="*60)
@@ -105,7 +112,7 @@ async def handle_video(message: types.Message, state: FSMContext):
     save_draft(message.from_user.id, {'media_type': 'video', 'media_id': media_id}, 'selecting_media')
     await goto_text_step(message, state, message.from_user.id)
 
-# --- Переход к шагу текста ---
+# --- ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ПЕРЕХОДА К ТЕКСТУ ---
 async def goto_text_step(target_message, state: FSMContext, user_id: int):
     await state.set_state(PostWorkflow.writing_text)
     data = await state.get_data()
@@ -137,7 +144,7 @@ async def goto_text_step(target_message, state: FSMContext, user_id: int):
     
     await target_message.answer(txt, reply_markup=kb)
 
-# ==================== ШАГ 2: ТЕКСТ (ЛОГИКА) ====================
+# ==================== ШАГ 2: ТЕКСТ (НАВИГАЦИЯ) ====================
 
 @dp.callback_query(lambda c: c.data.startswith('text:'))
 async def text_callback(callback: types.CallbackQuery, state: FSMContext):
@@ -176,27 +183,82 @@ async def text_callback(callback: types.CallbackQuery, state: FSMContext):
         )
         await callback.answer("Жду ваш текст...")
 
+# ==================== ОБРАБОТКА ТЕКСТА И БЫСТРЫЙ ВВОД КНОПОК ====================
+# 🔥 ЭТА ФУНКЦИЯ ЗАМЕНЯЕТ СТАРУЮ handle_text
+
 @dp.message(PostWorkflow.writing_text, F.text)
-async def handle_text(message: types.Message, state: FSMContext):
-    if message.text in ["◀️ Назад к медиа", "Вперёд к кнопкам ▶️", "✏️ Изменить текст"]:
+async def handle_text_and_quick_input(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    
+    # --- РЕЖИМ 1: БЫСТРЫЙ ВВОД КНОПОК (СПИСКОМ) ---
+    if data.get('waiting_for_quick_buttons'):
+        if message.text == "❌ Отмена":
+            await state.update_data(waiting_for_quick_buttons=False)
+            await cmd_cancel(message, state)
+            return
+
+        lines = message.text.strip().split('\n')
+        created_count = 0
+        
+        logger.info(f"👤 User {message.from_user.id} пытается быстрый ввод кнопок: {len(lines)} строк")
+        
+        for line in lines:
+            # Ищем разделитель " - " (пробел-тире-пробел) или просто "-"
+            if ' - ' in line:
+                parts = line.split(' - ', 1)
+            elif '-' in line:
+                parts = line.split('-', 1)
+            else:
+                continue # Пропускаем строки без разделителя
+                
+            if len(parts) == 2:
+                btn_text = parts[0].strip()
+                btn_url = parts[1].strip()
+                
+                # Проверка URL
+                if btn_url.startswith(('http://', 'https://', 't.me/', 'tg://')):
+                    if save_button(message.from_user.id, btn_text, btn_url):
+                        created_count += 1
+                        logger.info(f"✅ Кнопка создана: {btn_text}")
+        
+        await state.update_data(waiting_for_quick_buttons=False)
+        
+        if created_count > 0:
+            await message.answer(f"✅ **Создано кнопок: {created_count}!**\nОни сохранены в библиотеку.", parse_mode=ParseMode.MARKDOWN)
+        else:
+            await message.answer("⚠️ Не удалось распознать ни одной кнопки.\nПроверьте формат: `Текст - Ссылка`", parse_mode=ParseMode.MARKDOWN)
+        
+        await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", reply_markup=post_creation_keyboard())
         return
+
+    # --- РЕЖИМ 2: ОБЫЧНЫЙ ТЕКСТ ПОСТА ---
+    
+    # Игнорируем нажатия кнопок меню (если они вдруг пришли текстом)
+    ignore_texts = [
+        "◀️ Назад к медиа", "Вперёд к кнопкам ▶️", "✏️ Изменить текст", 
+        "➕ Добавить новую (по шагам)", "⚡ Быстрый ввод (списком)", 
+        "📚 Выбрать из библиотеки", "✅ Готово с кнопками"
+    ]
+    if message.text in ignore_texts:
+        return
+        
     if message.text == "❌ Отмена":
         await cmd_cancel(message, state)
         return
     
     text_len = len(message.text)
-    logger.info(f"👤 User {message.from_user.id} сохранил текст ({text_len} симв.)")
+    logger.info(f"👤 User {message.from_user.id} сохранил текст поста ({text_len} симв.)")
     
     await state.update_data(text=message.text)
     save_draft(message.from_user.id, {'text': message.text}, 'writing_text')
     
     await message.answer(
         f"✅ **Текст сохранён!** ({text_len} симв.)\n\n"
-        f"Теперь можно добавить кнопки или перейти дальше.",
-        reply_markup=text_navigation_keyboard()
+        f"Теперь выберите действие с кнопками:",
+        reply_markup=post_creation_keyboard()
     )
 
-# ==================== ШАГ 3: КНОПКИ (ДВА РЕЖИМА) ====================
+# ==================== ШАГ 3: КНОПКИ (ЛОГИКА) ====================
 
 @dp.message(F.text == "📚 Мои кнопки")
 async def cmd_my_buttons(message: types.Message):
@@ -206,7 +268,7 @@ async def cmd_my_buttons(message: types.Message):
         return
     await message.answer("**📚 Ваши сохранённые кнопки:**", parse_mode=ParseMode.MARKDOWN, reply_markup=library_keyboard(buttons))
 
-# --- РЕЖИМ 1: ПОШАГОВЫЙ ---
+# --- РЕЖИМ А: ПОШАГОВОЕ СОЗДАНИЕ ---
 @dp.message(F.text == "➕ Добавить новую (по шагам)")
 async def start_add_button_step(message: types.Message, state: FSMContext):
     logger.info(f"👤 User {message.from_user.id} начал пошаговое добавление кнопки")
@@ -266,10 +328,13 @@ async def process_button_url(message: types.Message, state: FSMContext):
     await state.update_data(new_btn_text=None, new_btn_url=None)
     await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", reply_markup=post_creation_keyboard())
 
-# --- РЕЖИМ 2: БЫСТРЫЙ ВВОД (СПИСКОМ) ---
+# --- РЕЖИМ Б: БЫСТРЫЙ ВВОД ---
 @dp.message(F.text == "⚡ Быстрый ввод (списком)")
 async def start_quick_add(message: types.Message, state: FSMContext):
     logger.info(f"👤 User {message.from_user.id} начал быстрый ввод кнопок")
+    # Устанавливаем флаг, что ждем быстрый ввод
+    await state.update_data(waiting_for_quick_buttons=True)
+    
     await message.answer(
         "⚡ **БЫСТРЫЙ ВВОД КНОПОК**\n\n"
         "Отправьте список кнопок в формате:\n"
@@ -282,56 +347,6 @@ async def start_quick_add(message: types.Message, state: FSMContext):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=cancel_keyboard()
     )
-    # Состояние не меняем, просто ждем следующее сообщение как текст, но помечаем флагом в памяти?
-    # Проще сделать временное состояние или обработать в общем хендлере, но лучше отдельное
-    await state.set_state(PostWorkflow.quick_input_mode) # Нужно добавить это состояние или использовать флаг
-    # Для простоты добавим состояние в states.py или используем текущее writing_text с флагом.
-    # Давайте добавим состояние QuickInput в states.py (см. выше) и переключимся туда.
-    # Но чтобы не менять states.py лишний раз, используем трюк: запомним в state, что ждем быстрый ввод.
-    await state.update_data(waiting_for_quick_buttons=True)
-
-# Обработчик для быстрого ввода (ловит текст, если стоит флаг)
-@dp.message(PostWorkflow.writing_text, F.text) 
-async def handle_quick_buttons_input(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    
-    # Если это не режим ожидания быстрого ввода, пропускаем (обработано выше в handle_text)
-    if not data.get('waiting_for_quick_buttons'):
-        return
-        
-    if message.text == "❌ Отмена":
-        await state.update_data(waiting_for_quick_buttons=False)
-        await cmd_cancel(message, state)
-        return
-
-    lines = message.text.strip().split('\n')
-    created_count = 0
-    
-    for line in lines:
-        # Ищем разделитель " - " или "-"
-        if ' - ' in line:
-            parts = line.split(' - ', 1)
-        elif '-' in line:
-            parts = line.split('-', 1)
-        else:
-            continue
-            
-        if len(parts) == 2:
-            btn_text = parts[0].strip()
-            btn_url = parts[1].strip()
-            
-            if btn_url.startswith(('http://', 'https://', 't.me/', 'tg://')):
-                if save_button(message.from_user.id, btn_text, btn_url):
-                    created_count += 1
-    
-    await state.update_data(waiting_for_quick_buttons=False)
-    
-    if created_count > 0:
-        await message.answer(f"✅ **Создано кнопок: {created_count}!**\nОни сохранены в библиотеку.", parse_mode=ParseMode.MARKDOWN)
-    else:
-        await message.answer("⚠️ Не удалось распознать ни одной кнопки. Проверьте формат: `Текст - Ссылка`.", parse_mode=ParseMode.MARKDOWN)
-    
-    await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", reply_markup=post_creation_keyboard())
 
 # --- ВЫБОР ИЗ БИБЛИОТЕКИ ---
 @dp.message(F.text == "📚 Выбрать из библиотеки")
