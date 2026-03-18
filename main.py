@@ -13,7 +13,7 @@ from database import init_db, save_button, get_saved_buttons, delete_button, sav
 
 # === НАСТРОЙКА ЛОГИРОВАНИЯ ===
 logging.basicConfig(
-    level=logging.DEBUG,  # ✅ Изменено на DEBUG для детальных логов
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
@@ -31,10 +31,10 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 init_db()
 
+# ✅ Исправлено: убираем bot.username, который не существует
 logger.info("="*60)
 logger.info("🚀 ПОСТ-ТРИУМФ ЗАПУСКАЕТСЯ")
 logger.info(f"🤖 Bot ID: {bot.id}")
-logger.info(f"📛 Username: @{bot.username}")
 logger.info("="*60)
 
 # ==================== ГЛАВНОЕ МЕНЮ ====================
@@ -137,6 +137,7 @@ async def skip_media(message: types.Message, state: FSMContext):
 
 @dp.message(PostWorkflow.writing_text, F.text)
 async def handle_text(message: types.Message, state: FSMContext):
+    # Игнорируем нажатия кнопок (они приходят как текст)
     if message.text in ["◀️ Назад к медиа", "Вперёд к ссылкам ▶️"]:
         logger.debug(f"👤 User {message.from_user.id} нажал кнопку навигации: {message.text}")
         return
@@ -224,7 +225,6 @@ async def main():
     logger.info("="*60)
     logger.info("🚀 ПОСТ-ТРИУМФ ЗАПУСКАЕТСЯ")
     logger.info(f"🤖 Bot ID: {bot.id}")
-    logger.info(f"📛 Username: @{bot.username}")
     logger.info("="*60)
     await bot.delete_webhook()
     await dp.start_polling(bot)
