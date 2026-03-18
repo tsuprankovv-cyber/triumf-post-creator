@@ -118,31 +118,36 @@ async def goto_text_step(target_message, state: FSMContext, user_id: int):
     data = await state.get_data()
     current_text = data.get('text', "")
     
+    # Текст подсказки с примерами форматирования
+    format_help = (
+        "💡 **Поддерживается форматирование:**\n"
+        "`**жирный**` → **жирный**\n"
+        "`*курсив*` → *курсив*\n"
+        "`__подчёркнутый__` → __подчёркнутый__\n"
+        "`~~зачёркнутый~~` → ~~зачёркнутый~~\n\n"
+        "🤖 **Умное форматирование:**\n"
+        "Нажмите кнопку «🪄 Сделать красиво», чтобы бот сам расставил акценты и эмодзи."
+    )
+
     if current_text:
         txt = (
-            "✍️ **ШАГ 2: Текст поста**\n\n"
-            "✅ Текст уже сохранён:\n"
-            f"_{current_text[:200]}{'...' if len(current_text)>200 else ''}_\n\n"
-            "🔹 Чтобы **изменить**: просто отправьте новый текст сообщением.\n"
-            "🔹 Чтобы **оставить как есть**: нажмите «Вперёд к кнопкам ▶️».\n"
-            "🔹 Чтобы **исправить ошибку**: нажмите «✏️ Изменить текст».",
-            parse_mode=ParseMode.MARKDOWN
+            f"✍️ **ШАГ 2: Текст поста**\n\n"
+            f"✅ Текст уже сохранён:\n_{current_text[:200]}{'...' if len(current_text)>200 else ''}_\n\n"
+            f"🔹 Чтобы **изменить**: просто отправьте новый текст сообщением.\n"
+            f"🔹 Чтобы **оставить как есть**: нажмите «Вперёд к кнопкам ▶️».\n"
+            f"🔹 Чтобы **исправить ошибку**: нажмите «✏️ Изменить текст».\n\n"
+            f"{format_help}"
         )
         kb = text_navigation_keyboard()
     else:
         txt = (
-            "✍️ **ШАГ 2: Текст поста**\n\n"
-            "Напишите текст вашего поста.\n\n"
-            "💡 **Поддерживается форматирование:**\n"
-            "`**жирный**` → **жирный**\n"
-            "`*курсив*` → *курсив*\n"
-            "`__подчёркнутый__` → __подчёркнутый__\n\n"
-            "📝 Пример:\n`Привет! Это **важный** пост.`",
-            parse_mode=ParseMode.MARKDOWN
+            f"✍️ **ШАГ 2: Текст поста**\n\n"
+            f"Напишите текст вашего поста.\n\n"
+            f"{format_help}"
         )
         kb = text_navigation_keyboard()
     
-    await target_message.answer(txt, reply_markup=kb)
+    await target_message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
 
 # ==================== ШАГ 2: ТЕКСТ (НАВИГАЦИЯ) ====================
 
@@ -162,7 +167,7 @@ async def text_callback(callback: types.CallbackQuery, state: FSMContext):
         else:
             txt += "Медиа не выбрано."
             
-        await callback.message.edit_text(txt, reply_markup=media_navigation_keyboard())
+        await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=media_navigation_keyboard())
         await callback.answer()
         
     elif action == 'next_to_buttons':
@@ -170,6 +175,7 @@ async def text_callback(callback: types.CallbackQuery, state: FSMContext):
             "🔘 **ШАГ 3: Кнопки**\n\n"
             "Добавьте кнопки под постом для переходов.\n"
             "Выберите удобный способ:",
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=post_creation_keyboard()
         )
         await callback.answer()
@@ -179,12 +185,39 @@ async def text_callback(callback: types.CallbackQuery, state: FSMContext):
             "✏️ **Редактирование текста**\n\n"
             "Отправьте новый текст, чтобы заменить текущий.\n"
             "Или нажмите «Отмена», если передумали.",
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=cancel_keyboard()
         )
         await callback.answer("Жду ваш текст...")
+        
+    elif action == 'smart_format':
+        # Логика умного форматирования (заглушка для примера)
+        data = await state.get_data()
+        current_text = data.get('text', "")
+        if not current_text:
+            await callback.answer("⚠️ Сначала введите текст!", show_alert=True)
+            return
+        
+        # Простая эмуляция: добавляем эмодзи и делаем заголовок жирным
+        lines = current_text.split('\n')
+        if len(lines) > 0 and not lines[0].startswith('**'):
+            lines[0] = f"**{lines[0]}**" # Делаем первую строку жирной
+        formatted_text = "\n".join(lines)
+        if "🔥" not in formatted_text:
+            formatted_text = "🔥 " + formatted_text
+            
+        await state.update_data(text=formatted_text)
+        save_draft(user_id, {'text': formatted_text}, 'writing_text')
+        
+        await callback.message.answer(
+            f"🪄 **Текст отформатирован!**\n\n_{formatted_text[:100]}..._\n\n"
+            f"Можете отправить новый текст или нажать «Вперёд».",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=text_navigation_keyboard()
+        )
+        await callback.answer("Готово!")
 
 # ==================== ОБРАБОТКА ТЕКСТА И БЫСТРЫЙ ВВОД КНОПОК ====================
-# 🔥 ЭТА ФУНКЦИЯ ЗАМЕНЯЕТ СТАРУЮ handle_text
 
 @dp.message(PostWorkflow.writing_text, F.text)
 async def handle_text_and_quick_input(message: types.Message, state: FSMContext):
@@ -203,19 +236,17 @@ async def handle_text_and_quick_input(message: types.Message, state: FSMContext)
         logger.info(f"👤 User {message.from_user.id} пытается быстрый ввод кнопок: {len(lines)} строк")
         
         for line in lines:
-            # Ищем разделитель " - " (пробел-тире-пробел) или просто "-"
             if ' - ' in line:
                 parts = line.split(' - ', 1)
             elif '-' in line:
                 parts = line.split('-', 1)
             else:
-                continue # Пропускаем строки без разделителя
+                continue
                 
             if len(parts) == 2:
                 btn_text = parts[0].strip()
                 btn_url = parts[1].strip()
                 
-                # Проверка URL
                 if btn_url.startswith(('http://', 'https://', 't.me/', 'tg://')):
                     if save_button(message.from_user.id, btn_text, btn_url):
                         created_count += 1
@@ -228,16 +259,15 @@ async def handle_text_and_quick_input(message: types.Message, state: FSMContext)
         else:
             await message.answer("⚠️ Не удалось распознать ни одной кнопки.\nПроверьте формат: `Текст - Ссылка`", parse_mode=ParseMode.MARKDOWN)
         
-        await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", reply_markup=post_creation_keyboard())
+        await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
         return
 
     # --- РЕЖИМ 2: ОБЫЧНЫЙ ТЕКСТ ПОСТА ---
     
-    # Игнорируем нажатия кнопок меню (если они вдруг пришли текстом)
     ignore_texts = [
         "◀️ Назад к медиа", "Вперёд к кнопкам ▶️", "✏️ Изменить текст", 
         "➕ Добавить новую (по шагам)", "⚡ Быстрый ввод (списком)", 
-        "📚 Выбрать из библиотеки", "✅ Готово с кнопками"
+        "📚 Выбрать из библиотеки", "✅ Готово с кнопками", "🪄 Сделать красиво"
     ]
     if message.text in ignore_texts:
         return
@@ -255,6 +285,7 @@ async def handle_text_and_quick_input(message: types.Message, state: FSMContext)
     await message.answer(
         f"✅ **Текст сохранён!** ({text_len} симв.)\n\n"
         f"Теперь выберите действие с кнопками:",
+        parse_mode=ParseMode.MARKDOWN,
         reply_markup=post_creation_keyboard()
     )
 
@@ -264,7 +295,7 @@ async def handle_text_and_quick_input(message: types.Message, state: FSMContext)
 async def cmd_my_buttons(message: types.Message):
     buttons = get_saved_buttons(message.from_user.id)
     if not buttons:
-        await message.answer("📚 Ваша библиотека пуста.", reply_markup=main_keyboard())
+        await message.answer("📚 Ваша библиотека пуста.", parse_mode=ParseMode.MARKDOWN, reply_markup=main_keyboard())
         return
     await message.answer("**📚 Ваши сохранённые кнопки:**", parse_mode=ParseMode.MARKDOWN, reply_markup=library_keyboard(buttons))
 
@@ -291,7 +322,7 @@ async def process_button_text(message: types.Message, state: FSMContext):
     
     btn_text = message.text.strip()
     if len(btn_text) > 50:
-        await message.answer("⚠️ Текст слишком длинный. Попробуйте короче.")
+        await message.answer("⚠️ Текст слишком длинный. Попробуйте короче.", parse_mode=ParseMode.MARKDOWN)
         return
 
     await state.update_data(new_btn_text=btn_text)
@@ -316,7 +347,7 @@ async def process_button_url(message: types.Message, state: FSMContext):
     btn_url = message.text.strip()
     
     if not btn_url.startswith(('http://', 'https://', 't.me/', 'tg://')):
-        await message.answer("❌ Ошибка: Ссылка должна начинаться с `http://`, `https://`, `t.me/`.\nПопробуйте ещё раз:", reply_markup=cancel_keyboard())
+        await message.answer("❌ Ошибка: Ссылка должна начинаться с `http://`, `https://`, `t.me/`.\nПопробуйте ещё раз:", parse_mode=ParseMode.MARKDOWN, reply_markup=cancel_keyboard())
         return
     
     if save_button(message.from_user.id, btn_text, btn_url):
@@ -326,13 +357,12 @@ async def process_button_url(message: types.Message, state: FSMContext):
     
     await state.set_state(None) 
     await state.update_data(new_btn_text=None, new_btn_url=None)
-    await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", reply_markup=post_creation_keyboard())
+    await message.answer("🔘 **МЕНЮ КНОПОК**\nЧто делаем дальше?", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
 
 # --- РЕЖИМ Б: БЫСТРЫЙ ВВОД ---
 @dp.message(F.text == "⚡ Быстрый ввод (списком)")
 async def start_quick_add(message: types.Message, state: FSMContext):
     logger.info(f"👤 User {message.from_user.id} начал быстрый ввод кнопок")
-    # Устанавливаем флаг, что ждем быстрый ввод
     await state.update_data(waiting_for_quick_buttons=True)
     
     await message.answer(
@@ -353,7 +383,7 @@ async def start_quick_add(message: types.Message, state: FSMContext):
 async def open_library_for_post(message: types.Message, state: FSMContext):
     buttons = get_saved_buttons(message.from_user.id)
     if not buttons:
-        await message.answer("📚 Библиотека пуста. Создайте кнопки через «➕ Добавить новую» или «⚡ Быстрый ввод».", reply_markup=post_creation_keyboard())
+        await message.answer("📚 Библиотека пуста. Создайте кнопки через «➕ Добавить новую» или «⚡ Быстрый ввод».", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
         return
     
     data = await state.get_data()
@@ -416,13 +446,13 @@ async def library_callback(callback: types.CallbackQuery, state: FSMContext):
                 builder.button(text=b['text'], url=b['url'])
         builder.adjust(1)
         
-        await callback.message.answer("✅ Кнопки добавлены к посту!", reply_markup=builder.as_markup())
-        await callback.message.answer("Продолжайте или нажмите **✅ Готово с кнопками**", reply_markup=post_creation_keyboard())
+        await callback.message.answer("✅ Кнопки добавлены к посту!", parse_mode=ParseMode.MARKDOWN, reply_markup=builder.as_markup())
+        await callback.message.answer("Продолжайте или нажмите **✅ Готово с кнопками**", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
         await callback.answer()
         
     elif action == 'back':
         await callback.message.delete()
-        await callback.message.answer("🔘 **МЕНЮ КНОПОК**", reply_markup=post_creation_keyboard())
+        await callback.message.answer("🔘 **МЕНЮ КНОПОК**", parse_mode=ParseMode.MARKDOWN, reply_markup=post_creation_keyboard())
         await callback.answer()
 
 # ==================== ФИНАЛ ====================
@@ -464,7 +494,7 @@ async def finish_post(message: types.Message, state: FSMContext):
 async def send_callback(callback: types.CallbackQuery):
     action = callback.data.split(':')[1]
     if action == 'manual':
-        await callback.message.answer("📤 **Инструкция:**\n1. Найди пост выше 👆\n2. Нажми «Переслать»\n3. Выбери чат")
+        await callback.message.answer("📤 **Инструкция:**\n1. Найди пост выше 👆\n2. Нажми «Переслать»\n3. Выбери чат", parse_mode=ParseMode.MARKDOWN)
         await callback.answer()
     elif action == 'anonymous':
         await callback.answer("👻 В разработке", show_alert=True)
