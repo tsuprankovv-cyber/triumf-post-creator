@@ -6,8 +6,9 @@ def main_keyboard():
     builder = ReplyKeyboardBuilder()
     builder.button(text="➕ Новый пост")
     builder.button(text="📚 Мои кнопки")
+    builder.button(text="📚 Мои ссылки")
     builder.button(text="❓ Помощь")
-    builder.adjust(2, 1)
+    builder.adjust(2, 2)
     return builder.as_markup(resize_keyboard=True)
 
 def cancel_keyboard():
@@ -15,62 +16,47 @@ def cancel_keyboard():
     builder.button(text="❌ Отмена")
     return builder.as_markup(resize_keyboard=True)
 
-def get_preview_keyboard(step: str, step_num: int, total_steps: int, has_text: bool, has_formatted: bool):
-    """Генерирует клавиатуру с индикатором прогресса (1/5, 2/5...)"""
-    builder = InlineKeyboardBuilder()
-    
-    # Индикатор прогресса в названии кнопок
-    progress = f" [{step_num}/{total_steps}]"
-    
-    if step == 'media':
-        builder.row(
-            InlineKeyboardButton(text=f"📷 Медиа{progress}", callback_data="prev:step_media"),
-        )
-        builder.row(
-            InlineKeyboardButton(text="⏭️ Пропустить", callback_data="prev:skip_media"),
-            InlineKeyboardButton(text="Далее: Текст ▶️", callback_data="prev:to_text")
-        )
-    elif step == 'text':
-        builder.row(
-            InlineKeyboardButton(text=f"✏️ Текст{progress}", callback_data="prev:step_text"),
-        )
-        builder.row(
-            InlineKeyboardButton(text="◀️ Назад: Медиа", callback_data="prev:back_media"),
-            InlineKeyboardButton(text="✏️ Править", callback_data="prev:edit_text")
-        )
-        builder.row(
-            InlineKeyboardButton(text="🤖 ИИ Текст", callback_data="prev:ai_generate"),
-            InlineKeyboardButton(text="🪄 Красиво", callback_data="prev:smart_format")
-        )
-        if has_formatted:
-            builder.row(
-                InlineKeyboardButton(text="🔄 Ещё", callback_data="prev:smart_next"),
-                InlineKeyboardButton(text="↩️ Сброс", callback_data="prev:smart_reset")
-            )
+def media_keyboard():
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="📷 Прикрепить фото/видео (скрепка 📎)")
+    builder.button(text="⏭️ Пропустить медиа")
+    builder.button(text="➡️ Далее: Текст")
+    builder.button(text="❌ Отмена")
+    builder.adjust(1, 2)
+    return builder.as_markup(resize_keyboard=True)
+
+def text_keyboard(has_text: bool, has_formatted: bool):
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="⬅️ Назад: Медиа")
+    builder.button(text="➡️ Далее: Кнопки")
+    builder.button(text="✏️ Редактировать текст")
+    if has_formatted:
+        builder.button(text="🔄 Эмодзи (сменить)")
+        builder.button(text="📄 Без формата")
+    else:
         if has_text:
-            builder.row(
-                InlineKeyboardButton(text="🧹 Без эмодзи", callback_data="prev:remove_emojis"),
-                InlineKeyboardButton(text="📄 Без формата", callback_data="prev:remove_format")
-            )
-        builder.row(InlineKeyboardButton(text="Далее: Кнопки ▶️", callback_data="prev:to_buttons"))
-    elif step == 'buttons':
-        builder.row(
-            InlineKeyboardButton(text=f"🔘 Кнопки{progress}", callback_data="prev:step_buttons"),
-        )
-        builder.row(
-            InlineKeyboardButton(text="◀️ Назад: Текст", callback_data="prev:back_text"),
-            InlineKeyboardButton(text="➕ Добавить", callback_data="prev:add_btn")
-        )
-        builder.row(
-            InlineKeyboardButton(text="📚 Из библиотеки", callback_data="prev:lib_btn"),
-            InlineKeyboardButton(text="✅ ФИНИШ: Готовый пост", callback_data="prev:finish")
-        )
-    
-    builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="prev:cancel"))
-    return builder.as_markup()
+            builder.button(text="🪄 Сделать красиво")
+            builder.button(text="🧹 Без эмодзи")
+    builder.button(text="🤖 ИИ: Обновить")
+    builder.button(text="🤖 ИИ: Новый запрос")
+    builder.button(text="❌ Отмена")
+    builder.adjust(2, 2, 2, 2)
+    return builder.as_markup(resize_keyboard=True)
+
+def buttons_keyboard(has_buttons: bool):
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="⬅️ Назад: Текст")
+    builder.button(text="➕ Добавить кнопку")
+    builder.button(text="📚 Из библиотеки кнопок")
+    builder.button(text="🔗 Добавить ссылку в текст")
+    builder.button(text="✅ ФИНИШ: Опубликовать")
+    builder.button(text="❌ Отмена")
+    builder.adjust(2, 2, 2)
+    return builder.as_markup(resize_keyboard=True)
 
 def library_keyboard(buttons: list, selected_ids: set = None):
-    if selected_ids is None: selected_ids = set()
+    if selected_ids is None:
+        selected_ids = set()
     builder = InlineKeyboardBuilder()
     for btn in buttons:
         icon = "✅" if btn['id'] in selected_ids else "🔘"
@@ -80,5 +66,16 @@ def library_keyboard(buttons: list, selected_ids: set = None):
     builder.row(
         InlineKeyboardButton(text="✅ Применить", callback_data="lib:apply"),
         InlineKeyboardButton(text="◀️ Назад", callback_data="lib:back")
+    )
+    return builder.as_markup()
+
+def saved_links_keyboard(links: list):
+    builder = InlineKeyboardBuilder()
+    for link in links:
+        builder.button(text=f"🔗 {link['text']}", callback_data=f"link:insert:{link['id']}")
+    builder.adjust(2)
+    builder.row(
+        InlineKeyboardButton(text="➕ Создать новую", callback_data="link:create"),
+        InlineKeyboardButton(text="◀️ Назад", callback_data="link:back")
     )
     return builder.as_markup()
