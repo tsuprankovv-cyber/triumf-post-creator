@@ -10,6 +10,8 @@ def init_db():
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS saved_buttons
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, button_text TEXT, button_url TEXT, created_at TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS saved_links
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, link_text TEXT, link_url TEXT, created_at TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS post_drafts
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, media_type TEXT, media_id TEXT,
                   text_content TEXT, buttons_json TEXT, current_step TEXT, created_at TIMESTAMP, updated_at TIMESTAMP)''')
@@ -32,13 +34,22 @@ def get_saved_buttons(user_id, limit=50):
     rows = c.fetchall(); conn.close()
     return [{'id': r[0], 'text': r[1], 'url': r[2]} for r in rows]
 
-def delete_button(button_id, user_id):
-    conn = sqlite3.connect(DB_NAME); c = conn.cursor()
-    c.execute('DELETE FROM saved_buttons WHERE id=? AND user_id=?', (button_id, user_id))
-    conn.commit(); conn.close(); return c.rowcount > 0
+def save_link(user_id, text, url):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('INSERT INTO saved_links (user_id, link_text, link_url, created_at) VALUES (?, ?, ?, ?)', (user_id, text, url, datetime.now()))
+    conn.commit(); conn.close(); return True
+
+def get_saved_links(user_id, limit=50):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('SELECT id, link_text, link_url FROM saved_links WHERE user_id=? ORDER BY created_at DESC LIMIT ?', (user_id, limit))
+    rows = c.fetchall(); conn.close()
+    return [{'id': r[0], 'text': r[1], 'url': r[2]} for r in rows]
 
 def save_draft(user_id, data, step):
-    conn = sqlite3.connect(DB_NAME); c = conn.cursor()
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
     c.execute('SELECT id FROM post_drafts WHERE user_id=?', (user_id,))
     exists = c.fetchone()
     now = datetime.now()
@@ -53,7 +64,8 @@ def save_draft(user_id, data, step):
     conn.commit(); conn.close(); return True
 
 def get_draft(user_id):
-    conn = sqlite3.connect(DB_NAME); c = conn.cursor()
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
     c.execute('SELECT media_type, media_id, text_content, buttons_json, current_step FROM post_drafts WHERE user_id=?', (user_id,))
     row = c.fetchone(); conn.close()
     if row:
@@ -61,5 +73,6 @@ def get_draft(user_id):
     return {}
 
 def delete_draft(user_id):
-    conn = sqlite3.connect(DB_NAME); c = conn.cursor()
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
     c.execute('DELETE FROM post_drafts WHERE user_id=?', (user_id,)); conn.commit(); conn.close(); return True
