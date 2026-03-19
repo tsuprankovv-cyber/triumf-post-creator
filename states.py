@@ -7,6 +7,7 @@ class PostWorkflow(StatesGroup):
     adding_buttons = State()
     ai_input = State()
     selecting_link = State()
+    editing_post = State()  # Для редактирования старых постов
 
 class AddButtonSteps(StatesGroup):
     waiting_for_text = State()
