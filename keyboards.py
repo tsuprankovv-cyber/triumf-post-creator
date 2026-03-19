@@ -15,17 +15,27 @@ def cancel_keyboard():
     builder.button(text="❌ Отмена")
     return builder.as_markup(resize_keyboard=True)
 
-def get_preview_keyboard(step: str, has_text: bool, has_formatted: bool):
+def get_preview_keyboard(step: str, step_num: int, total_steps: int, has_text: bool, has_formatted: bool):
+    """Генерирует клавиатуру с индикатором прогресса (1/5, 2/5...)"""
     builder = InlineKeyboardBuilder()
     
+    # Индикатор прогресса в названии кнопок
+    progress = f" [{step_num}/{total_steps}]"
+    
     if step == 'media':
+        builder.row(
+            InlineKeyboardButton(text=f"📷 Медиа{progress}", callback_data="prev:step_media"),
+        )
         builder.row(
             InlineKeyboardButton(text="⏭️ Пропустить", callback_data="prev:skip_media"),
             InlineKeyboardButton(text="Далее: Текст ▶️", callback_data="prev:to_text")
         )
     elif step == 'text':
         builder.row(
-            InlineKeyboardButton(text="◀️ Назад", callback_data="prev:back_media"),
+            InlineKeyboardButton(text=f"✏️ Текст{progress}", callback_data="prev:step_text"),
+        )
+        builder.row(
+            InlineKeyboardButton(text="◀️ Назад: Медиа", callback_data="prev:back_media"),
             InlineKeyboardButton(text="✏️ Править", callback_data="prev:edit_text")
         )
         builder.row(
@@ -45,12 +55,15 @@ def get_preview_keyboard(step: str, has_text: bool, has_formatted: bool):
         builder.row(InlineKeyboardButton(text="Далее: Кнопки ▶️", callback_data="prev:to_buttons"))
     elif step == 'buttons':
         builder.row(
-            InlineKeyboardButton(text="◀️ Назад", callback_data="prev:back_text"),
+            InlineKeyboardButton(text=f"🔘 Кнопки{progress}", callback_data="prev:step_buttons"),
+        )
+        builder.row(
+            InlineKeyboardButton(text="◀️ Назад: Текст", callback_data="prev:back_text"),
             InlineKeyboardButton(text="➕ Добавить", callback_data="prev:add_btn")
         )
         builder.row(
             InlineKeyboardButton(text="📚 Из библиотеки", callback_data="prev:lib_btn"),
-            InlineKeyboardButton(text="✅ ФИНИШ", callback_data="prev:finish")
+            InlineKeyboardButton(text="✅ ФИНИШ: Готовый пост", callback_data="prev:finish")
         )
     
     builder.row(InlineKeyboardButton(text="❌ Отмена", callback_data="prev:cancel"))
