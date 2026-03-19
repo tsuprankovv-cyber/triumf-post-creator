@@ -2,7 +2,6 @@
 import re
 import random
 
-# === БАЗЫ ЭМОДЗИ (Только для усиления, не замены) ===
 EMOJI_THEMES = {
     'thailand': ['🇹🇭', '🌴', '🏖️', '🛺', '🍜', '🥥', '🐘', '🌊', '☀️', '🍹'],
     'vietnam': ['🇻🇳', '🛶', '🎋', '🍚', '☕', '🏍️', '🌾', '🏖️', '🦞'],
@@ -68,19 +67,10 @@ def get_emoji_pool(theme):
     return list(set(pool))
 
 def remove_emojis(text):
-    """Удаляет все эмодзи из текста, оставляя форматирование"""
-    emoji_pattern = re.compile("["
-        u"\U0001F600-\U0001F64F"  # emoticons
-        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
-        u"\U0001F680-\U0001F6FF"  # transport & map symbols
-        u"\U0001F1E0-\U0001F1FF"  # flags
-        u"\U00002702-\U000027B0"
-        u"\U000024C2-\U0001F251"
-        "]+", flags=re.UNICODE)
+    emoji_pattern = re.compile("[" u"\U0001F600-\U0001F64F" u"\U0001F300-\U0001F5FF" u"\U0001F680-\U0001F6FF" u"\U0001F1E0-\U0001F1FF" u"\U00002702-\U000027B0" u"\U000024C2-\U0001F251" "]+", flags=re.UNICODE)
     return emoji_pattern.sub(r'', text).strip()
 
 def remove_formatting(text):
-    """Удаляет Markdown форматирование (**, *, __), оставляя эмодзи"""
     text = re.sub(r'\*\*(.*?)\*\*', r'\1', text)
     text = re.sub(r'\*(.*?)\*', r'\1', text)
     text = re.sub(r'__(.*?)__', r'\1', text)
@@ -88,7 +78,6 @@ def remove_formatting(text):
     return text
 
 def add_smart_emojis(text, theme, density):
-    """Добавляет эмодзи ТОЛЬКО рядом со словами или в начало строк, не заменяя их"""
     lines = text.split('\n')
     result = []
     pool = get_emoji_pool(theme)
@@ -99,24 +88,20 @@ def add_smart_emojis(text, theme, density):
         if not stripped:
             result.append(line)
             continue
-            
-        # Проверка: есть ли уже эмодзи в начале?
         first_char = stripped[0] if stripped else ''
         code = ord(first_char) if first_char else 0
         has_emoji_start = 0x1F300 <= code <= 0x1F9FF or 0x2600 <= code <= 0x27BF or 0x1F1E0 <= code <= 0x1F1FF
         
         should_add = False
-        if i == 0: should_add = True # Заголовок всегда
+        if i == 0: should_add = True
         elif density == 2 and len(stripped) < 100: should_add = True
         elif density == 1 and len(stripped) < 60: should_add = True
         
         if should_add and not has_emoji_start:
             emoji = random.choice(pool)
-            # Добавляем ПЕРЕД строкой, не заменяя слова
             result.append(f"{emoji} {line}")
         else:
             result.append(line)
-            
     return '\n'.join(result)
 
 def format_lists(text, marker):
@@ -124,7 +109,6 @@ def format_lists(text, marker):
     result = []
     for line in lines:
         stripped = line.strip()
-        # Заменяем маркеры списков на красивые, но не трогаем текст
         if re.match(r'^[\-\*\•]\s', stripped):
             result.append(re.sub(r'^[\-\*\•]\s', f'{marker} ', stripped))
         else:
@@ -143,20 +127,16 @@ def smart_format_text(original_text, variant_index):
     
     style = STYLES[variant_index % len(STYLES)]
     theme = detect_theme(original_text)
-    
     lines = original_text.split('\n')
     formatted_lines = []
     header_done = False
     
-    # 1. Обработка заголовка и структуры
     for line in lines:
         if not line.strip():
             formatted_lines.append(line)
             continue
-        
         if not header_done:
             clean_line = line.strip()
-            # Делаем заголовок жирным
             formatted_lines.append(f"**{clean_line}**")
             header_done = True
         else:
@@ -165,12 +145,6 @@ def smart_format_text(original_text, variant_index):
     result = '\n'.join(formatted_lines)
     result = format_lists(result, style['list_marker'])
     result = highlight_keywords(result, style['highlight'])
-    
-    # 2. Добавление эмодзи (только рядом, не вместо)
     result = add_smart_emojis(result, theme, style['emoji_density'])
     
-    return {
-        "text": result, 
-        "style_name": style['name'], 
-        "detected_theme": theme.replace('_', ' ').title()
-    }
+    return {"text": result, "style_name": style['name'], "detected_theme": theme.replace('_', ' ').title()}
