@@ -20,7 +20,7 @@ from database import (
     init_db, save_button, get_saved_buttons, delete_button,
     save_link, get_saved_links, delete_link,
     save_published_post, get_published_posts, get_published_post, delete_published_post,
-    save_draft, get_draft, delete_draft
+    save_draft
 )
 from smart_text import smart_format_text, remove_emojis, remove_formatting, generate_ai_text, get_available_styles
 from help_text import get_help_text
@@ -44,19 +44,10 @@ if not BOT_TOKEN:
     logger.error("❌ НЕТ ТОКЕНА!")
     raise ValueError("❌ Нет токена!")
 
-# === ХРАНИЛИЩА ===
-preview_messages = {}  # {chat_id: message_id}
-emoji_variants = {}
-style_variants = {}
-temp_messages = {}  # {chat_id: [message_ids]}
-library_return_points = {}
-menu_messages = {}  # {chat_id: message_id}
-
 # === ДИАГНОСТИКА ПОДКЛЮЧЕНИЯ ===
 async def test_telegram_connection():
     """Проверка доступности Telegram API"""
     import aiohttp
-    import ssl
     
     logger.info("🔍 === ПРОВЕРКА ПОДКЛЮЧЕНИЯ ===")
     
@@ -95,6 +86,19 @@ if PROXY_URL:
     logger.info(f"🔄 PROXY_URL: {PROXY_URL[:30]}...")
 else:
     logger.info("⚠️ PROXY_URL не установлен (если нужно — добавьте в .env)")
+
+# === ИНИЦИАЛИЗАЦИЯ ===
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+init_db()
+
+# === ХРАНИЛИЩА ===
+preview_messages = {}  # {chat_id: message_id}
+emoji_variants = {}
+style_variants = {}
+temp_messages = {}  # {chat_id: [message_ids]}
+library_return_points = {}
+menu_messages = {}  # {chat_id: message_id}
 
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 async def delete_message_safe(chat_id: int, message_id: int):
