@@ -8,7 +8,6 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from aiogram.client.session.aiohttp import AiohttpSession
 from states import PostWorkflow, AddButtonSteps, AddLinkSteps
 from keyboards import (
     main_keyboard, cancel_keyboard, media_keyboard,
@@ -51,14 +50,12 @@ async def test_telegram_connection():
     
     logger.info("🔍 === ПРОВЕРКА ПОДКЛЮЧЕНИЯ ===")
     
-    # 1. Проверка токена
     if not BOT_TOKEN:
         logger.error("❌ BOT_TOKEN не установлен!")
         return False
     logger.info(f"✅ BOT_TOKEN: установлен (длина: {len(BOT_TOKEN)})")
     logger.info(f"🔑 Первые 10 символов: {BOT_TOKEN[:10]}...")
     
-    # 2. Прямой тест соединения
     logger.info("🌐 Тестируем api.telegram.org...")
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
@@ -81,11 +78,11 @@ async def test_telegram_connection():
         logger.error(f"❌ Неизвестная ошибка: {type(e).__name__}: {e}")
         return False
 
-# 3. Информация о прокси
+# Информация о прокси
 if PROXY_URL:
     logger.info(f"🔄 PROXY_URL: {PROXY_URL[:30]}...")
 else:
-    logger.info("⚠️ PROXY_URL не установлен (если нужно — добавьте в .env)")
+    logger.info("⚠️ PROXY_URL не установлен")
 
 # === ИНИЦИАЛИЗАЦИЯ ===
 storage = MemoryStorage()
@@ -93,16 +90,15 @@ dp = Dispatcher(storage=storage)
 init_db()
 
 # === ХРАНИЛИЩА ===
-preview_messages = {}  # {chat_id: message_id}
+preview_messages = {}
 emoji_variants = {}
 style_variants = {}
-temp_messages = {}  # {chat_id: [message_ids]}
+temp_messages = {}
 library_return_points = {}
-menu_messages = {}  # {chat_id: message_id}
+menu_messages = {}
 
 # === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
 async def delete_message_safe(chat_id: int, message_id: int):
-    """Безопасное удаление"""
     try:
         await bot.delete_message(chat_id, message_id)
         logger.debug(f"🗑️ Удалено {message_id}")
@@ -110,27 +106,23 @@ async def delete_message_safe(chat_id: int, message_id: int):
         logger.debug(f"⚠️ Не удалил {message_id}: {e}")
 
 async def cleanup_all_temp_messages(chat_id: int):
-    """Удалить ВСЕ временные сообщения"""
     if chat_id in temp_messages:
         for msg_id in temp_messages[chat_id][:]:
             await delete_message_safe(chat_id, msg_id)
         temp_messages[chat_id] = []
         logger.debug(f"🧹 Очистка temp завершена")
     
-    # 🔹 УДАЛЯЕМ МЕНЮ
     if chat_id in menu_messages:
         await delete_message_safe(chat_id, menu_messages[chat_id])
         del menu_messages[chat_id]
         logger.debug(f"🧹 Меню удалено")
 
 async def add_temp_message(chat_id: int, message_id: int):
-    """Добавить в список на удаление"""
     if chat_id not in temp_messages:
         temp_messages[chat_id] = []
     temp_messages[chat_id].append(message_id)
 
 async def update_preview(state: FSMContext, chat_id: int):
-    """Обновить превью БЕЗ проверки типа (используем state)"""
     logger.debug(f"🔄 UPDATE_PREVIEW: chat_id={chat_id}")
     try:
         data = await state.get_data()
@@ -141,7 +133,6 @@ async def update_preview(state: FSMContext, chat_id: int):
         media_type = data.get('media_type')
         buttons_data = data.get('buttons', [])
         
-        # Формируем caption
         if not text_content:
             caption = "<b>📝 ПРЕВЬЮ ПОСТА</b>\n\n<i>_(Нажмите ✏️ Редактировать текст или 🤖 ИИ)_</i>"
         else:
@@ -155,7 +146,6 @@ async def update_preview(state: FSMContext, chat_id: int):
         logger.debug(f"💾 Stored msg_id: {stored_msg_id}")
         
         if stored_msg_id:
-            # 🔹 ИСПОЛЬЗУЕМ ТИП ИЗ STATE, НЕ ПРОВЕРЯЕМ
             old_type = data.get('_preview_media_type', 'text')
             logger.debug(f"📍 Старый тип (из state): {old_type}, новый: {media_type}")
             
@@ -228,7 +218,6 @@ async def update_preview(state: FSMContext, chat_id: int):
 async def cmd_start(message: types.Message):
     cid = message.chat.id
     logger.info(f"👤 START: {cid}")
-    # 🔹 УДАЛЯЕМ ПРЕДЫДУЩЕЕ МЕНЮ
     await cleanup_all_temp_messages(cid)
     if cid in menu_messages:
         await delete_message_safe(cid, menu_messages[cid])
@@ -239,7 +228,7 @@ async def cmd_start(message: types.Message):
         parse_mode=ParseMode.HTML,
         reply_markup=main_keyboard()
     )
-    menu_messages[cid] = msg.message_id  # Сохраняем для удаления
+    menu_messages[cid] = msg.message_id
     logger.info(f"✅ Меню отправлено")
 
 @dp.message(F.text == "❌ Отмена")
@@ -257,7 +246,6 @@ async def cmd_cancel(message: types.Message, state: FSMContext):
 async def start_post(message: types.Message, state: FSMContext):
     cid = message.chat.id
     logger.info(f"🆕 НОВЫЙ ПОСТ: {cid}")
-    # 🔹 УДАЛЯЕМ ВСЁ
     await cleanup_all_temp_messages(cid)
     if cid in preview_messages:
         await delete_message_safe(cid, preview_messages[cid])
@@ -273,7 +261,6 @@ async def start_post(message: types.Message, state: FSMContext):
 
     await update_preview(state, cid)
 
-    # 🔹 КОРОТКАЯ ПОДСКАЗКА
     msg = await message.answer(
         "<b>📷 ШАГ 1/3: Медиа</b>\n\n"
         "📎 <b>Добавить фото:</b>\n"
@@ -447,7 +434,6 @@ async def edit_text(message: types.Message, state: FSMContext):
         await add_temp_message(cid, msg.message_id)
         return
 
-    # 🔹 ОТПРАВЛЯЕМ ТЕКСТ ПОЧАСТЯМ ЕСЛИ ДЛИННЫЙ
     clean = remove_emojis(remove_formatting(raw))
     await state.set_state(PostWorkflow.writing_text)
 
@@ -846,7 +832,6 @@ async def handle_wrong_step(message: types.Message, state: FSMContext):
 
 # === ЗАПУСК ===
 async def main():
-    # 🔹 ПРОВЕРКА ПОДКЛЮЧЕНИЯ ПЕРЕД ЗАПУСКОМ
     connection_ok = await test_telegram_connection()
     
     if not connection_ok:
@@ -855,18 +840,8 @@ async def main():
         logger.error("   1. Добавьте PROXY_URL в переменные окружения")
         logger.error("   2. Или используйте хостинг за пределами РФ")
         logger.error("   3. Или проверьте фаервол/сеть")
-        return  # ⚠️ НЕ ЗАПУСКАТЬ БОТА БЕЗ СОЕДИНЕНИЯ
+        return
     
-    # 🔹 СОЗДАНИЕ BOT С ПРОКСИ (ЕСЛИ НУЖЕН)
-    if PROXY_URL:
-        logger.info("🔄 Используем прокси...")
-        session = AiohttpSession(proxy=PROXY_URL)
-        bot = Bot(token=BOT_TOKEN, session=session)
-    else:
-        logger.info("🔌 Прямое подключение (без прокси)")
-        bot = Bot(token=BOT_TOKEN)
-    
-    # 🔹 ДАЛЕЕ ОБЫЧНЫЙ ЗАПУСК
     try:
         await bot.delete_webhook()
         logger.info("🚀 ЗАПУСК БОТА...")
@@ -875,5 +850,4 @@ async def main():
         logger.error(f"❌ Ошибка запуска: {e}", exc_info=True)
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())
