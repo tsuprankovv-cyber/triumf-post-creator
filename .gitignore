@@ -1,15 +1,15 @@
-# Environment variables
+# Environment
 .env
 *.env
 
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
+*.pyc
+*.pyo
+*.pyd
 .Python
-venv/
 env/
+venv/
 
 # Logs
 *.log
@@ -25,7 +25,6 @@ templates.db
 .vscode/
 *.swp
 *.swo
-*~
 
 # OS
 .DS_Store
