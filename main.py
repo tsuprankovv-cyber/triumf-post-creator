@@ -49,7 +49,6 @@ if not BOT_TOKEN:
 
 logger.info(f"🔧 DEBUG режим: {DEBUG}")
 logger.info(f"🌐 Порт: {PORT}")
-logger.info(f"📦 Версия Python: {os.sys.version}")
 
 # === ИНИЦИАЛИЗАЦИЯ ===
 bot = Bot(token=BOT_TOKEN)
@@ -371,12 +370,11 @@ async def handle_photo(message: types.Message, state: FSMContext):
     cid = message.chat.id
     logger.info(f"📸 ФОТО: {cid}")
     
+    await cleanup_chat(cid, keep_preview=True)
+    
     data = await state.get_data()
     current_step = data.get('step')
     logger.info(f"💾 STATE до: step={current_step}, media_id={data.get('media_id')}")
-    
-    if current_step != 'media':
-        logger.warning(f"⚠️ Фото получено не на шаге media (текущий шаг: {current_step}), но обрабатываем")
     
     # Сохраняем фото
     media_id = message.photo[-1].file_id
@@ -405,9 +403,10 @@ async def handle_video(message: types.Message, state: FSMContext):
     cid = message.chat.id
     logger.info(f"🎬 ВИДЕО: {cid}")
     
+    await cleanup_chat(cid, keep_preview=True)
+    
     data = await state.get_data()
-    if data.get('step') != 'media':
-        logger.warning(f"⚠️ Видео получено не на шаге media (текущий шаг: {data.get('step')})")
+    logger.info(f"💾 STATE до: step={data.get('step')}")
     
     media_id = message.video.file_id
     await state.update_data(media_type='video', media_id=media_id)
@@ -573,14 +572,16 @@ async def handle_ai_input(message: types.Message, state: FSMContext):
     kws = message.text.strip()
     await state.update_data(ai_keywords=kws)
     
-    # Генерируем текст
+    # Генерируем текст (каждый раз новый!)
     selected_style = random.choice(get_available_styles())
     txt = generate_ai_text(kws, style=selected_style)
     
+    # СНАЧАЛА сохраняем в state, ПОТОМ обновляем превью
     await state.update_data(text=txt, original_text=txt, smart_variant=-1, ai_style=selected_style)
     save_draft(cid, {'text': txt}, 'text')
     await state.set_state(None)
     
+    # Обновляем превью (теперь текст будет виден!)
     await update_preview(state, cid)
     
     text = f"✅ <b>Текст сгенерирован!</b>\n\n<i>Стиль: {selected_style}</i>\n\nВыберите действие:"
@@ -600,8 +601,11 @@ async def ai_update(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Сначала создайте запрос через «🤖 ИИ: Новый запрос»", reply_markup=text_keyboard(True, True))
         return
     
-    txt = generate_ai_text(kws, style=data.get('ai_style'))
-    await state.update_data(text=txt, original_text=txt)
+    # Генерируем НОВЫЙ текст (не тот же самый!)
+    selected_style = random.choice(get_available_styles())
+    txt = generate_ai_text(kws, style=selected_style)
+    
+    await state.update_data(text=txt, original_text=txt, ai_style=selected_style)
     await update_preview(state, cid)
     
     await message.answer("✅ Текст обновлён!", reply_markup=text_keyboard(True, True))
@@ -628,12 +632,9 @@ async def make_beautiful(message: types.Message, state: FSMContext):
     await message.answer("✅ Текст отформатирован!", reply_markup=text_keyboard(True, True))
 
 @dp.message(F.text == "🔄 Эмодзи (сменить)")
-@dp.message(F.text == "🧹 Без эмодзи")
-@dp.message(F.text == "📄 Без формата")
-async def text_format_actions(message: types.Message, state: FSMContext):
+async def change_emojis(message: types.Message, state: FSMContext):
     cid = message.chat.id
-    action = message.text
-    logger.info(f"🎨 ФОРМАТИРОВАНИЕ: {action} в чате {cid}")
+    logger.info(f"🔄 ЭМОДЗИ (СМЕНИТЬ): {cid}")
     
     await cleanup_chat(cid, keep_preview=True)
     data = await state.get_data()
@@ -643,31 +644,61 @@ async def text_format_actions(message: types.Message, state: FSMContext):
         await message.answer("⚠️ Нет текста для форматирования")
         return
     
-    if action == "🔄 Эмодзи (сменить)":
-        variant = data.get('emoji_variant', 0) + 1
-        clean_orig = remove_emojis(remove_formatting(data.get('original_text', txt)))
-        res = smart_format_text(clean_orig, data.get('smart_variant', 0), variant)
-        await state.update_data(text=res['text'], emoji_variant=variant)
-        await message.answer(f"✅ Вариант эмодзи #{variant}")
-        
-    elif action == "🧹 Без эмодзи":
-        cleaned = remove_emojis(txt)
-        if cleaned == txt:
-            await message.answer("ℹ️ Эмодзи уже нет")
-            return
-        await state.update_data(text=cleaned)
-        await message.answer("✅ Эмодзи удалены")
-        
-    elif action == "📄 Без формата":
-        cleaned = remove_formatting(txt)
-        if cleaned == txt:
-            await message.answer("ℹ️ Форматирование уже снято")
-            return
-        await state.update_data(text=cleaned, original_text=None, smart_variant=-1)
-        await message.answer("✅ Форматирование снято")
+    # Генерируем НОВЫЙ вариант эмодзи через ИИ
+    variant = data.get('emoji_variant', 0) + 1
+    clean_orig = remove_emojis(remove_formatting(data.get('original_text', txt)))
+    res = smart_format_text(clean_orig, data.get('smart_variant', 0), variant)
     
+    await state.update_data(text=res['text'], emoji_variant=variant)
     await update_preview(state, cid)
-    await message.answer("Выберите следующее действие:", reply_markup=text_keyboard(True, bool(data.get('original_text'))))
+    
+    await message.answer(f"✅ Вариант эмодзи #{variant}", reply_markup=text_keyboard(True, True))
+
+@dp.message(F.text == "🧹 Без эмодзи")
+async def remove_emojis_btn(message: types.Message, state: FSMContext):
+    cid = message.chat.id
+    logger.info(f"🧹 БЕЗ ЭМОДЗИ: {cid}")
+    
+    await cleanup_chat(cid, keep_preview=True)
+    data = await state.get_data()
+    txt = data.get('text', '')
+    
+    if not txt:
+        await message.answer("⚠️ Нет текста для форматирования")
+        return
+    
+    cleaned = remove_emojis(txt)
+    if cleaned == txt:
+        await message.answer("ℹ️ Эмодзи уже нет")
+        return
+    
+    await state.update_data(text=cleaned)
+    await update_preview(state, cid)
+    
+    await message.answer("✅ Эмодзи удалены", reply_markup=text_keyboard(True, False))
+
+@dp.message(F.text == "📄 Без формата")
+async def remove_format_btn(message: types.Message, state: FSMContext):
+    cid = message.chat.id
+    logger.info(f"📄 БЕЗ ФОРМАТА: {cid}")
+    
+    await cleanup_chat(cid, keep_preview=True)
+    data = await state.get_data()
+    txt = data.get('text', '')
+    
+    if not txt:
+        await message.answer("⚠️ Нет текста для форматирования")
+        return
+    
+    cleaned = remove_formatting(txt)
+    if cleaned == txt:
+        await message.answer("ℹ️ Форматирование уже снято")
+        return
+    
+    await state.update_data(text=cleaned, original_text=None, smart_variant=-1)
+    await update_preview(state, cid)
+    
+    await message.answer("✅ Форматирование снято", reply_markup=text_keyboard(True, False))
 
 @dp.message(F.text == "➡️ Далее: Кнопки")
 async def to_buttons(message: types.Message, state: FSMContext):
@@ -918,13 +949,14 @@ async def library_callback(callback: types.CallbackQuery, state: FSMContext):
             await callback.message.answer("🤖 <b>Пост-Триумф Live</b>", parse_mode=ParseMode.HTML, reply_markup=main_keyboard())
         await callback.answer()
 
-# === НЕВЕРНЫЙ ШАГ (В КОНЦЕ ФАЙЛА!) ===
+# === НЕВЕРНЫЙ ШАГ (В САМОМ КОНЦЕ ФАЙЛА!) ===
 @dp.message()
 async def handle_unknown(message: types.Message, state: FSMContext):
     """Обработчик неизвестных сообщений — ДОЛЖЕН БЫТЬ В КОНЦЕ"""
     cid = message.chat.id
     data = await state.get_data()
     step = data.get('step')
+    current_state = await state.get_state()
     text = message.text
     
     # Игнорируем системные команды и кнопки меню
@@ -940,6 +972,12 @@ async def handle_unknown(message: types.Message, state: FSMContext):
     if text in ["✏️ Редактировать текст", "🤖 ИИ: Новый запрос", "🤖 ИИ: Обновить", "🪄 Сделать красиво", "🔄 Эмодзи (сменить)", "🧹 Без эмодзи", "📄 Без формата", "🔗 Добавить ссылку в текст", "➕ Добавить кнопку", "📚 Библиотека кнопок", "🔗 Библиотека ссылок", "✅ ФИНИШ: Опубликовать"]:
         logger.debug(f"⚙️ Игнорируем кнопку действия: {text}")
         return
+    
+    # Если бот ждёт ввода текста (состояние активно) — НЕ перехватываем!
+    if current_state and current_state != '*':
+        logger.debug(f"⚙️ Активное состояние {current_state}, игнорируем: {text[:50]}")
+        return
+    
     if not step:
         logger.debug(f"⚙️ Нет активного шага, игнорируем: {text[:50]}")
         return
