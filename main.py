@@ -8,6 +8,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiohttp import web  # ✅ Для веб-сервера на Render
+
 from states import PostWorkflow, AddButtonSteps, AddLinkSteps
 from keyboards import (
     main_keyboard, cancel_keyboard, media_keyboard,
@@ -33,11 +35,11 @@ logging.basicConfig(
         logging.FileHandler('bot_debug.log', encoding='utf-8', mode='a')
     ]
 )
-# ✅ ИСПРАВЛЕНО: было `name` → `__name__`
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # ✅ ИСПРАВЛЕНО: __name__
 
 # === ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ===
 BOT_TOKEN = os.getenv('BOT_TOKEN')
+PORT = int(os.getenv('PORT', 8080))  # ✅ Порт для Render
 
 if not BOT_TOKEN:
     logger.error("❌ НЕТ ТОКЕНА!")
@@ -61,9 +63,7 @@ menu_messages = {}
 async def delete_message_safe(chat_id: int, message_id: int):
     try:
         await bot.delete_message(chat_id, message_id)
-        logger.debug(f"🗑️ Удалено {message_id}")
-    except Exception as e:
-        logger.debug(f"⚠️ Не удалил {message_id}: {e}")
+    except: pass
 
 async def cleanup_all_temp_messages(chat_id: int):
     if chat_id in temp_messages:
@@ -155,7 +155,7 @@ async def start_post(message: types.Message, state: FSMContext):
     await state.clear()
     await state.update_data(step='media', text='', media_id=None, media_type=None, buttons=[], original_text=None, ai_keywords=None, smart_variant=-1, emoji_variant=0, ai_style=None, _preview_media_type=None)
     await update_preview(state, cid)
-    msg = await message.answer("<b>📷 ШАГ 1/3: Медиа</b>\n\n📎 <b>Добавить фото:</b>\n1. Нажмите скрепку 📎 в поле ввода\n2. Выберите фото\n3. Отправьте\n\n⏭️ Или пропустите\n\n❓ Помощь для подробной инструкции", parse_mode=ParseMode.HTML, reply_markup=media_keyboard())
+    msg = await message.answer("<b>📷 ШАГ 1/3: Медиа</b>\n\n📎 <b>Добавить фото:</b>\n1. Нажмите скрепку 📎 в поле ввода\n2. Выберите фото\n3. Отправьте\n\n⏭️ Или пропустите", parse_mode=ParseMode.HTML, reply_markup=media_keyboard())
     await add_temp_message(cid, msg.message_id)
 
 @dp.message(F.text == "📋 Мои посты")
@@ -208,7 +208,7 @@ async def handle_photo(message: types.Message, state: FSMContext):
     await state.update_data(media_type='photo', media_id=media_id)
     await update_preview(state, cid)
     await delete_message_safe(cid, message.message_id)
-    msg = await message.answer("<b>✅ Фото в превью!</b>\n\n➡️ Далее: Текст\n✏️ Или редактировать текст", parse_mode=ParseMode.HTML, reply_markup=media_keyboard(has_media=True))
+    msg = await message.answer("<b>✅ Фото в превью!</b>\n\n➡️ Далее: Текст", parse_mode=ParseMode.HTML, reply_markup=media_keyboard(has_media=True))
     await add_temp_message(cid, msg.message_id)
 
 @dp.message(F.video)
@@ -233,7 +233,7 @@ async def skip_media(message: types.Message, state: FSMContext):
     await delete_message_safe(cid, message.message_id)
     await state.update_data(media_type=None, media_id=None, step='text')
     await update_preview(state, cid)
-    msg = await message.answer("<b>✏️ ШАГ 2/3: Текст</b>\n\n🤖 ИИ или вручную", parse_mode=ParseMode.HTML, reply_markup=text_keyboard(False, False))
+    msg = await message.answer("<b>✏️ ШАГ 2/3: Текст</b>", parse_mode=ParseMode.HTML, reply_markup=text_keyboard(False, False))
     await add_temp_message(cid, msg.message_id)
 
 @dp.message(F.text == "🔄 Заменить медиа")
@@ -653,12 +653,32 @@ async def handle_wrong_step(message: types.Message, state: FSMContext):
     msg = await message.answer(f"⚠️ Сейчас шаг {current_step.upper()}", reply_markup=cancel_keyboard())
     await add_temp_message(cid, msg.message_id)
 
+# === 🌐 ВЕБ-СЕРВЕР ДЛЯ RENDER ===
+async def handle_health(request):
+    """Health check endpoint для Render"""
+    return web.Response(text="OK")
+
+async def start_web_server():
+    """Запускает мини-веб-сервер на порту для Render"""
+    app = web.Application()
+    app.router.add_get('/', handle_health)
+    app.router.add_get('/health', handle_health)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    await site.start()
+    logger.info(f"🌐 Веб-сервер запущен на порту {PORT}")
+
 # === ЗАПУСК ===
 async def main():
+    # ✅ Запускаем веб-сервер (чтобы Render не убивал процесс)
+    await start_web_server()
+    
+    # ✅ Запускаем бота
     await bot.delete_webhook()
     logger.info("🚀 ЗАПУСК БОТА...")
     await dp.start_polling(bot)
 
-# ✅ ИСПРАВЛЕНО: было `if name == 'main':` → `if __name__ == '__main__':`
 if __name__ == '__main__':
     asyncio.run(main())
